@@ -522,18 +522,22 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  use get_apr_level, only:get_apr
  use physcon,       only:pi
  use utils_apr,     only:apr_centre
- use vectorutils, only:cross_product3D
+ use vectorutils, only:cross_product3D,matrixinvert3D
  integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew
  integer(kind=1), intent(inout) :: apr_level(:)
  integer,         intent(in)    :: current_apr,mergelist(:)
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
- integer :: remainder,icell,n_cell,apri,m,i
- integer :: eldest,tuther,testp,testpp,n
- real    :: com(3),pmassi,xyzh_fromicentre(3),xcom(3),vcom(3)
- real    :: r_ave,phi_ave,theta_ave,r_part,phi_part,ex,ey,ez,xyzh_rot(3)
- real    :: pos_com(3),vel_com(3),am(3),ogen(3),ogam(3),vxyzu_rot(3),en(3),am_term(3)
- logical :: spherical,zero_vel
+ integer :: remainder,icell,n_cell,apri,m,i,ierr
+ integer :: eldest,tuther,testp,testpp,n,child_list(12),parent_list(6)
+ real    :: com(3),pmassi,xyzh_fromicentre(3)
+ real    :: r_ave,phi_ave,theta_ave,r_part,phi_part,ekin
+ real    :: pos_com(3),vel_com(3),am(3),ogen,ogam(3),am_term(3)
+ real    :: Q(3,3),pdash,qdash,det,phi,lamb(3),es(3,3),sum_temp,s_min,S,dist(3),inv_iner(3,3)
+ real    :: test_a,test_b,test_c,vec_a(3),vec_b(3),vec_c(3),u(3),v(3),w(3)
+ real    :: lm(3),iner(3,3),lm_ave(3),term(3),omega(3),delta_ekin
+ real    :: alpha,alpha1,alpha2,discriminant,A,B,C,un(3)
+ logical :: spherical
  type(cellforce)        :: cell
 
  ! First ensure that we're only sending in groups of 12 to the tree
@@ -552,36 +556,36 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
 
     spherical = .true.
     if (.not.spherical) then
-    ! if not using spherical coordinates to check the cell location, just use existing info
-      call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
-      com(1:3) = cell%xpos(1:3)
+       ! if not using spherical coordinates to check the cell location, just use existing info
+       call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
+       com(1:3) = cell%xpos(1:3)
     else
-      ! if spherical chosen, calculated the com in spherical coordinates and check
-      ! if that is within the boundary or not (convert back to cartesian com later on)
-      r_ave = 0.
-      theta_ave = 0.
-      phi_ave = 0.
-      ! spherically average the position of the particles around the current APR region
-      do m = 1,n_cell
-         i = inodeparts(inoderange(1,icell) + m - 1)
-         xyzh_fromicentre(1:3) = xyzh_merge(1:3,i) - apr_centre(1:3,icentre)
-         !print*,i,xyzh_merge(1:3,i)
-         r_part = sqrt(dot_product(xyzh_fromicentre(1:3),xyzh_fromicentre(1:3)))
-         r_ave = r_ave + r_part
-         theta_ave = theta_ave + acos(xyzh_fromicentre(3)/r_part)
-         phi_part = atan2(xyzh_fromicentre(2),xyzh_fromicentre(1))
-         !if (phi_ave < 0.) phi_ave = phi_ave + 2.*pi
-         phi_ave = phi_ave + phi_part
-      enddo
-      r_ave = r_ave/real(n_cell)
-      theta_ave = theta_ave/real(n_cell)
-      phi_ave = phi_ave/real(n_cell)
+       ! if spherical chosen, calculated the com in spherical coordinates and check
+       ! if that is within the boundary or not (convert back to cartesian com later on)
+       r_ave = 0.
+       theta_ave = 0.
+       phi_ave = 0.
+       ! spherically average the position of the particles around the current APR region
+       do m = 1,n_cell
+          i = inodeparts(inoderange(1,icell) + m - 1)
+          xyzh_fromicentre(1:3) = xyzh_merge(1:3,i) - apr_centre(1:3,icentre)
+          !print*,i,xyzh_merge(1:3,i)
+          r_part = sqrt(dot_product(xyzh_fromicentre(1:3),xyzh_fromicentre(1:3)))
+          r_ave = r_ave + r_part
+          theta_ave = theta_ave + acos(xyzh_fromicentre(3)/r_part)
+          phi_part = atan2(xyzh_fromicentre(2),xyzh_fromicentre(1))
+          !if (phi_ave < 0.) phi_ave = phi_ave + 2.*pi
+          phi_ave = phi_ave + phi_part
+       enddo
+       r_ave = r_ave/real(n_cell)
+       theta_ave = theta_ave/real(n_cell)
+       phi_ave = phi_ave/real(n_cell)
 
-      ! now convert back to cartesian equivalents
-      com(1) = r_ave*sin(theta_ave)*cos(phi_ave)
-      com(2) = r_ave*sin(theta_ave)*sin(phi_ave)
-      com(3) = r_ave*cos(theta_ave)
-      com(:) = com(:) + apr_centre(1:3,icentre) ! for sending back into get_apr
+       ! now convert back to cartesian equivalents
+       com(1) = r_ave*sin(theta_ave)*cos(phi_ave)
+       com(2) = r_ave*sin(theta_ave)*sin(phi_ave)
+       com(3) = r_ave*cos(theta_ave)
+       com(:) = com(:) + apr_centre(1:3,icentre) ! for sending back into get_apr
     endif
 
     call get_apr(com(1:3),icentre,apri)
@@ -589,139 +593,240 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
     ! If the apr level based on the com is lower than the current level,
     ! we merge!
     if (apri < current_apr) then
-      ! here we take 12 particles from each leaf in the tree and combine these into six new particles
-      ! the new particles are constructed to conserve the average properties of the children
+       ! here we take 12 particles from each leaf in the tree and combine these into six new particles
+       ! the new particles are constructed to conserve the average properties of the children
 
-      pmassi = aprmassoftype(igas,apr_level(inodeparts(inoderange(1,icell)))) ! this *current* mass is correct
-                                           ! because only particles to merge are sent in
+       pmassi = aprmassoftype(igas,apr_level(inodeparts(inoderange(1,icell)))) ! this *current* mass is correct
+       ! because only particles to merge are sent in
 
-      ! start by calculating (or using) the average properties of the 12 children
-      pos_com = 0.
-      vel_com(:) = 0.
-      am(:) = 0.
-      i = inodeparts(inoderange(1,icell))
-      ex = 0.
-      ey = 0.
-      ez = 0.
+       ! start by calculating (or using) the average properties of the 12 children
+       pos_com = 0.
+       vel_com(:) = 0.
+       am(:) = 0.
+       lm(:) = 0.
+       i = inodeparts(inoderange(1,icell))
+       ekin = 0.
        do m = 1,n_cell
-         i = inodeparts(inoderange(1,icell) + m - 1)
-         vel_com(:) = vel_com(:) + vxyzu_merge(1:3,i)
-         pos_com(:) = pos_com(:) + xyzh_merge(1:3,i)
-         call cross_product3D(xyzh_merge(1:3,i),vxyzu_merge(1:3,i),am_term(:))
-         am(:) = am(:) + pmassi*am_term(:)
-         ex = ex + 0.5*pmassi*vxyzu_merge(1,i)**2
-         ey = ey + 0.5*pmassi*vxyzu_merge(2,i)**2
-         ez = ez + 0.5*pmassi*vxyzu_merge(3,i)**2
+          i = inodeparts(inoderange(1,icell) + m - 1)
+          child_list(m) = i ! save these for later
+          vel_com(:) = vel_com(:) + vxyzu_merge(1:3,i)
+          pos_com(:) = pos_com(:) + xyzh_merge(1:3,i)
+          ekin = ekin + 0.5*pmassi*(vxyzu_merge(1,i)**2 &
+                 + vxyzu_merge(2,i)**2 + vxyzu_merge(3,i)**2)
+          lm(:) = lm(:) + pmassi*vxyzu_merge(:,i)
        enddo
 
        vel_com(:) = vel_com(:)/real(n_cell)
        pos_com(:) = pos_com(:)/real(n_cell)
-       ogen(:) = (/ ex, ey ,ez /)
+       ogen = ekin
+       lm_ave(:) = lm(:)/(n_cell*pmassi)
+
+       ! adjust the particle positions to the com frame
+       do m = 1,n_cell
+          i = inodeparts(inoderange(1,icell) + m - 1)
+          xyzh_merge(1:3,i) = xyzh_merge(1:3,i) - pos_com(1:3)
+       enddo
+
+       ! calculate the quadrupole mass moment and the adjusted angular momentum
+       Q = 0.
+       do m = 1,n_cell
+          i = child_list(m)
+          r_part = dot_product(xyzh_merge(1:3,i),xyzh_merge(1:3,i))
+          Q(1,1) = Q(1,1) + pmassi*(3.*xyzh_merge(1,i)**2 - r_part)
+          Q(2,2) = Q(2,2) + pmassi*(3.*xyzh_merge(2,i)**2 - r_part)
+          Q(3,3) = Q(3,3) + pmassi*(3.*xyzh_merge(3,i)**2 - r_part)
+          Q(1,2) = Q(1,2) + pmassi*(3.*xyzh_merge(1,i)*xyzh_merge(2,i))
+          Q(1,3) = Q(1,3) + pmassi*(3.*xyzh_merge(1,i)*xyzh_merge(3,i))
+          Q(2,3) = Q(2,3) + pmassi*(3.*xyzh_merge(2,i)*xyzh_merge(3,i))
+          call cross_product3D(xyzh_merge(1:3,i),vxyzu_merge(1:3,i),am_term(:))
+          am(:) = am(:) + pmassi*am_term(:)
+       enddo
+       ! by definition
+       Q(2,1) = Q(1,2)
+       Q(3,1) = Q(1,3)
+       Q(3,2) = Q(2,3)
        ogam(:) = am(:)
 
-       ! for next round
-       am(:) = 0.
-       ex = 0.
-       ey = 0.
-       ez = 0.
+       ! calculate the terms we need for the eigenvectors
+       pdash = -(Q(1,1)*Q(1,1) + Q(2,2)*Q(2,2) + Q(3,3)*Q(3,3) &
+           + 2.*Q(1,2)*Q(1,2) + 2.*Q(1,3)*Q(1,3) + 2.*Q(2,3)*Q(2,3))/2.
+       det =  Q(1,1)*(Q(2,2)*Q(3,3) - Q(2,3)*Q(3,2)) &
+            - Q(1,2)*(Q(2,1)*Q(3,3) - Q(2,3)*Q(3,1)) &
+            + Q(1,3)*(Q(2,1)*Q(3,2) - Q(2,2)*Q(3,1))
+       qdash = -det
+       phi = 1./3. * acos(3.*qdash * sqrt(-3/pdash)/(2*pdash))
 
-       ! now we need am and en in rotated frame
-       do m = 1,n_cell
-         testp = inodeparts(inoderange(1,icell) + m - 1) ! as in kdtree
-         xyzh_rot(:) = xyzh_merge(1:3,testp) - pos_com(:)
-         vxyzu_rot(:) = vxyzu_merge(1:3,testp) - vel_com(:)
-         call cross_product3D(xyzh_rot,vxyzu_rot,am_term(:))
-         am(:) = am(:) + pmassi*am_term(:)
-         ex = ex + 0.5*pmassi*vxyzu_rot(1)**2
-         ey = ey + 0.5*pmassi*vxyzu_rot(2)**2
-         ez = ez + 0.5*pmassi*vxyzu_rot(3)**2
+       ! I think we don't need to sort these as we take the shortest later
+       do m = 1,3
+          lamb(m) = 2.*sqrt(-pdash/3) * cos(phi - ((2.*pi * (m - 1))/3))
        enddo
-       en(:) = (/ex,ey,ez/) ! we don't average energy or am components
-       zero_vel = .false.
-       if (sum(en(:)) < tiny(ex)) zero_vel = .true. ! these have to be treated differently
+
+       ! now construct the eigenvectors
+       do i = 1,3
+          u = (/Q(1,1) - lamb(i), Q(1,2), Q(1,3)/)
+          v = (/Q(2,1), Q(2,2) - lamb(i), Q(2,3)/)
+          w = (/Q(3,1), Q(3,2), Q(3,3) - lamb(i)/)
+
+          call cross_product3D(u,v,vec_a)
+          call cross_product3D(u,w,vec_b)
+          call cross_product3D(v,w,vec_c)
+
+          test_a = dot_product(vec_a,vec_a)
+          test_b = dot_product(vec_b,vec_b)
+          test_c = dot_product(vec_c,vec_c)
+
+          ! take the one that is longest (safest choice)
+          if ((test_a > test_b) .and. (test_a > test_c)) then
+             es(1:3,i) = vec_a/sqrt(test_a)
+          else if ((test_b > test_a) .and. (test_b > test_c)) then
+             es(1:3,i) = vec_b/sqrt(test_b)
+          else
+             es(1:3,i) = vec_c/sqrt(test_c)
+          endif
+       enddo
+
+       ! calculate the distances for the anti-podal pairs
+       sum_temp = 0.
+       do m = 1,n_cell
+          i = child_list(m)
+          r_part = dot_product(xyzh_merge(1:3,i),xyzh_merge(1:3,i))
+          sum_temp = sum_temp + 0.5/12. * r_part
+       enddo
+
+       s_min = 3.* abs(minval(lamb)) / (12.*pmassi)
+
+       S = max(sum_temp, s_min*1.05)
+
+       ! now calculate the distance vectors along these eigenvectors
+       do i = 1,3
+          dist(i) = sqrt((S/3.) + (lamb(i)/(12.*pmassi)))
+       enddo
 
        ! merge the first six particles with the last six particles
-       xcom = 0.
-       vcom = 0.
        do m = 1,(n_cell/2)
-         eldest = mergelist(inodeparts(inoderange(1,icell) + m - 1)) ! remember we're running off the mergelist
-         tuther = mergelist(inodeparts(inoderange(1,icell) + m + 5)) ! + 5
+          eldest = mergelist(inodeparts(inoderange(1,icell) + m - 1)) ! remember we're running off the mergelist
+          tuther = mergelist(inodeparts(inoderange(1,icell) + m + 5)) ! + 5
 
-         ! discard tuther ("the other")
-         call combine_two_particles(eldest,tuther)
-         apr_level(eldest) = apr_level(eldest) - int(1,kind=1)
-         xyzh(4,eldest) = (xyzh(4,eldest))*(2.0**(1./3.)) ! rescale for its new mass
-         if (ind_timesteps) call put_in_smallest_bin(eldest)
-         
-         ! book-keeping
-         if (do_relax) then
-            nrelax = nrelax + 1
-            relaxlist(nrelax) = eldest
-         endif
+          ! discard tuther ("the other")
+          call combine_two_particles(eldest,tuther)
+          parent_list(m) = eldest
+          apr_level(eldest) = apr_level(eldest) - int(1,kind=1)
+          xyzh(4,eldest) = (xyzh(4,eldest))*(2.0**(1./3.)) ! rescale for its new mass
+          if (ind_timesteps) call put_in_smallest_bin(eldest)
 
-         ! If this particle was on the shuffle list previously, take it off
-         do n = 1,nrelax
-            if (relaxlist(n) == tuther) relaxlist(n) = 0
-         enddo
+          ! book-keeping
+          if (do_relax) then
+             nrelax = nrelax + 1
+             relaxlist(nrelax) = eldest
+          endif
+
+          ! If this particle was on the shuffle list previously, take it off
+          do n = 1,nrelax
+             if (relaxlist(n) == tuther) relaxlist(n) = 0
+          enddo
+
        enddo
 
        nkilled = nkilled + 12 ! this refers to the number of children killed
 
-       ! adjust the mass
-       pmassi = 2.*pmassi
-
-       ! now, let's adjust the properties of the remaining particles
-       ! if zero_vel, these particles should just be merged the basic way (which was done above)
-       ! if .not.zero_vel, need to do clever merging
-       ! to construct the properties we want (in the com frame first, then edit to simulation frame)
+       ! now adjust the particle positions accordingly - we adjust away from com later
        ! particle 1:
-      if (.not.zero_vel) then
-       testp = mergelist(inodeparts(inoderange(1,icell)))
-       xyzh(1:3,testp) = (/ (am(3)/(2.*pmassi))/sqrt(en(2)/pmassi), 0., 0./)
-       vxyzu(1:3,testp) = (/ 0., sqrt(en(2)/pmassi), 0./)
+       testp = parent_list(1)
+       xyzh(1:3,testp) = dist(1) * es(:,1)
 
        ! particle 2:
-       testpp = mergelist(inodeparts(inoderange(1,icell) + 1))
-       xyzh(1:3,testpp) = -xyzh(1:3,testp)
-       vxyzu(1:3,testpp) = -vxyzu(1:3,testp)
-
-       xyzh(1:3,testp)   = xyzh(1:3,testp)   + pos_com(:)
-       xyzh(1:3,testpp)  = xyzh(1:3,testpp)  + pos_com(:)
-       vxyzu(1:3,testp)  = vxyzu(1:3,testp)  + vel_com(:)
-       vxyzu(1:3,testpp) = vxyzu(1:3,testpp) + vel_com(:)
+       testpp = parent_list(2)
+       xyzh(1:3,testpp) = -dist(1) * es(:,1)
 
        ! particle 3:
-       testp = mergelist(inodeparts(inoderange(1,icell) + 2))
-       xyzh(1:3,testp) = (/ 0., (am(1)/(2.*pmassi))/sqrt(en(3)/pmassi), 0./)
-       vxyzu(1:3,testp) = (/ 0., 0., sqrt(en(3)/pmassi)/)
+       testp = parent_list(3)
+       xyzh(1:3,testp) = dist(2) * es(:,2)
 
        ! particle 4:
-       testpp = mergelist(inodeparts(inoderange(1,icell) + 3))
-       xyzh(1:3,testpp) = -xyzh(1:3,testp)
-       vxyzu(1:3,testpp) = -vxyzu(1:3,testp)
+       testpp = parent_list(4)
+       xyzh(1:3,testpp) = -dist(2) * es(:,2)
 
-       xyzh(1:3,testp)   = xyzh(1:3,testp)   + pos_com(:)
-       xyzh(1:3,testpp)  = xyzh(1:3,testpp)  + pos_com(:)
-       vxyzu(1:3,testp)  = vxyzu(1:3,testp)  + vel_com(:)
-       vxyzu(1:3,testpp) = vxyzu(1:3,testpp) + vel_com(:)
-       
        ! particle 5:
-       testp = mergelist(inodeparts(inoderange(1,icell) + 4))
-       xyzh(1:3,testp) = (/ 0., 0., (am(2)/(2.*pmassi))/sqrt(en(1)/pmassi)/)
-       vxyzu(1:3,testp) = (/ sqrt(en(1)/pmassi), 0., 0. /)
+       testp = parent_list(5)
+       xyzh(1:3,testp) = dist(3) * es(:,3)
 
        ! particle 6:
-       testpp = mergelist(inodeparts(inoderange(1,icell) + 5))
-       xyzh(1:3,testpp) = -xyzh(1:3,testp)
-       vxyzu(1:3,testpp) = -vxyzu(1:3,testp)
-       
-       xyzh(1:3,testp)   = xyzh(1:3,testp)   + pos_com(:)
-       xyzh(1:3,testpp)  = xyzh(1:3,testpp)  + pos_com(:)
-       vxyzu(1:3,testp)  = vxyzu(1:3,testp)  + vel_com(:)
-       vxyzu(1:3,testpp) = vxyzu(1:3,testpp) + vel_com(:)
-      endif
+       testpp = parent_list(6)
+       xyzh(1:3,testpp) = -dist(3) * es(:,3)
 
-   endif
+       ! now we set the velocities
+       ! first calculate the inertia tensor of the 6 new particles
+       iner(:,:) = 0.
+       pmassi = 2.*pmassi
+       do m = 1,6
+          i = parent_list(m)
+          iner(1,1) = iner(1,1) + pmassi * (xyzh(2,i)**2 + xyzh(3,i)**2)
+          iner(2,2) = iner(2,2) + pmassi * (xyzh(1,i)**2 + xyzh(3,i)**2)
+          iner(3,3) = iner(3,3) + pmassi * (xyzh(1,i)**2 + xyzh(2,i)**2)
+          iner(1,2) = iner(1,2) - pmassi * (xyzh(1,i)*xyzh(2,i))
+          iner(1,3) = iner(1,3) - pmassi * (xyzh(1,i)*xyzh(3,i))
+          iner(2,3) = iner(2,3) - pmassi * (xyzh(2,i)*xyzh(3,i))
+       enddo
+
+       iner(2,1) = iner(1,2)
+       iner(3,1) = iner(1,3)
+       iner(3,2) = iner(2,3)
+
+       ! now invert the matrix and set the individual velocities
+       call matrixinvert3D(iner,inv_iner,ierr)
+       omega(:) = matmul(inv_iner,am)
+       do m = 1,6
+          i = parent_list(m)
+          call cross_product3D(omega,xyzh(1:3,i),term)
+          vxyzu(1:3,i) = lm_ave(1:3) + term
+       enddo
+
+
+       ! and now account for kinetic energy:
+       ! calculate the current kinetic energy
+       ekin = 0.
+       do m = 1,6
+          i = parent_list(m)
+          ekin = ekin + 0.5 * pmassi * dot_product(vxyzu(1:3,i),vxyzu(1:3,i))
+       enddo
+       ! and the difference between original and current is (what we need to match)
+       delta_ekin = ekin - ogen
+
+       ! we write this out as a quadratic and solve the quadratic formula
+       B = 0.
+       do m = 1,6
+          i = parent_list(m)
+          un = xyzh(1:3,i) / sqrt(dot_product(xyzh(1:3,i),xyzh(1:3,i)))
+          B = B + pmassi * dot_product(vxyzu(1:3,i),un(:))
+       enddo
+       C = delta_ekin
+       A = 3.*pmassi
+
+       ! now we solve the quadratic
+       discriminant = B**2 - 4.*A*C
+       if (discriminant > 0.) then
+          alpha1 = (-B + sqrt(discriminant)) / (2.*A)
+          alpha2 = (-B - sqrt(discriminant)) / (2.*A)
+
+          ! and take the solution that has the same sign as delta_ekin
+          if (alpha1 * delta_ekin > 0.) then
+             alpha = alpha1
+          else
+             alpha = alpha2
+          endif
+       else
+          alpha = 0.
+       endif
+
+       ! finally, adjust the velocities accordingly and move the particles back to the simulation frame
+       do m = 1,6
+          i = parent_list(m)
+          un = xyzh(1:3,i) / sqrt(dot_product(xyzh(1:3,i),xyzh(1:3,i)))
+          vxyzu(1:3,i) = vxyzu(1:3,i) + alpha*un
+          xyzh(1:3,i) = xyzh(1:3,i) + pos_com(:)
+       enddo
+
+    endif
 
  enddo over_cells
 
