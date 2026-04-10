@@ -16,7 +16,7 @@ module utils_apr
 !   - apr_drad     : *size of step to next region*
 !   - apr_max      : *number of additional refinement levels (3 -> 2x resolution)*
 !   - apr_rad      : *radius of innermost region*
-!   - apr_type     : *1: static, 2: sink, 3: clumps, 4: sequential sinks, 5: com, 6: vertical*
+!   - apr_type     : *1: static, 2: sink, 3: clumps, 4: sequential sinks, 5: com, 6: vertical, 7: sink with flexible regions*
 !   - ref_dir      : *increase (1) or decrease (-1) resolution*
 !   - rho_crit_cgs : *density above which apr zones are created (g/cm^3)*
 !   - split_dir    : *1: tangent to boundary, 2: along trajectory, 3: purely randomly*
@@ -126,7 +126,7 @@ subroutine write_options_apr(iunit)
  call write_inopt(apr_max_in,'apr_max','number of additional refinement levels (3 -> 2x resolution)',iunit)
  call write_inopt(ref_dir,'ref_dir','increase (1) or decrease (-1) resolution',iunit)
  call write_inopt(split_dir,'split_dir','1: tangent to boundary, 2: along trajectory, 3: purely randomly',iunit)
- call write_inopt(apr_type,'apr_type','1: static, 2: sink, 3: clumps, 4: sequential sinks, 5: com, 6: vertical',iunit)
+ call write_inopt(apr_type,'apr_type','1: static, 2: sink, 3: clumps, 4: sequential sinks, 5: com, 6: vertical, 7: sink with flexible regions',iunit)
 
  select case (apr_type)
  case(1)

@@ -50,7 +50,7 @@ subroutine set_get_apr()
 
  ! Here set the requirements for the apr_type to read in the right values
 ! for apr_types that read in a particle number
- if (apr_type == 2) then
+ if (apr_type == 2 .or. apr_type == 7) then
     track_part(1) = track_part_in
  endif
 
