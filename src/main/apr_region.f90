@@ -57,7 +57,7 @@ subroutine set_apr_centre(apr_type,apr_centre,ntrack,track_part)
  case(1) ! a static circle
     ! do nothing here
 
- case(2) ! around sink particle named track_part
+ case(2, 7) ! around sink particle named track_part
     apr_centre(1,1) = xyzmh_ptmass(1,track_part(1))
     apr_centre(2,1) = xyzmh_ptmass(2,track_part(1))
     apr_centre(3,1) = xyzmh_ptmass(3,track_part(1))

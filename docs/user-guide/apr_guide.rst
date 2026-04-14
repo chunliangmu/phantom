@@ -74,7 +74,7 @@ To increase the spatial resolution by a factor of 2 you will need to use 3 level
 This chooses whether you are refining or derefining the simulation. If you are refining then the base resolution level will be 0.
 If you are derefining the base level will be apr_max::
 
-  apr_type =           2    ! 1: static, 2: moving sink, 3: create clumps
+  apr_type =           2    ! 1: static, 2: moving sink, 3: create clumps, 7: moving sink with flexible regions
 
 Here you choose what kind of region you want. Current options include:
  1.	A position fixed in space
