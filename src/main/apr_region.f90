@@ -62,6 +62,11 @@ subroutine set_apr_centre(apr_type,apr_centre,ntrack,track_part)
     apr_centre(2,1) = xyzmh_ptmass(2,track_part(1))
     apr_centre(3,1) = xyzmh_ptmass(3,track_part(1))
 
+    if (apr_type == 7) then
+       ! reset boundary (only after initialized)
+       if (allocated(apr_regions)) call update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regions)
+    end if
+
  case(3) ! to derefine a clump
 
     ! to speed things up, we only call this every 10 steps
@@ -128,8 +133,9 @@ subroutine set_apr_regions(ref_dir,apr_max,apr_regions,apr_rad,apr_drad)
     do ii = 2,apr_max-1
        apr_regions(ii) = apr_regions(ii-1) + apr_drad + (apr_max - ii)
     enddo
-    print*, 'apr region boundaries at ', apr_regions
  endif
+
+ print*, 'apr region boundaries at ', apr_regions
 
 end subroutine set_apr_regions
 
@@ -204,7 +210,7 @@ subroutine identify_clumps(npart,xyzh,vxyzu,poten,apr_level,xyzmh_ptmass,aprmass
 
 end subroutine identify_clumps
 
- !-----------------------------------------------------------------------
+!-----------------------------------------------------------------------
 !+
 !  Given a list track_part of ntrack particles to track, create or update
 !  clumps as appropriate
@@ -270,5 +276,97 @@ subroutine create_or_update_apr_clump(npart,xyzh,vxyzu,poten,apr_level,xyzmh_ptm
  enddo over_mins
 
 end subroutine create_or_update_apr_clump
+
+!-----------------------------------------------------------------------
+!+
+!  Update the apr region arrays that decide
+!  the spatial arrangement of the regions
+!  based on particle mass distribution
+!+
+!-----------------------------------------------------------------------
+subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regions)
+ !use setstar_utils, only: get_mass_coord
+ use sortutils, only:sort_by_radius
+ use part,      only:igas,apr_level
+ ! use energies,  only:mtot    ! [clmu] for some reason this is causing a compiler error
+ integer, intent(in) :: npart,ref_dir,apr_max
+ real, intent(in)    :: xyzh(:,:),aprmassoftype(:,:)
+ real, intent(inout) :: apr_regions(apr_max)
+ integer :: i,j
+ integer, allocatable :: iorder(:)
+ real :: massri, mtot
+ ! arbitrarily define the prescribed mfrac location ()
+ real, parameter :: prescribed_mfrac(10) = [ 0.477, 0.614, 0.732, &
+                                           & 0.829, 0.897, 0.942, & 
+                                           & 0.971, 0.987, 0.995, 1.0]
+ real, dimension(10) :: prescribed_mcoord
+   
+
+ ! Assert (as band-aid solution for my ad-hoc fixes)
+ if (apr_max /= 10) then
+    print *, "Error: apr_type==7 currently only support 9 apr_levels at hard-coded location &
+       &ref_dir as false."
+ endif
+
+ ! calc mtot since fortran is not cooperating with us getting that in energies.f90
+ mtot = 0.0
+ do i = 1, npart
+    mtot = mtot + aprmassoftype(igas,apr_level(i))
+ enddo
+
+ prescribed_mcoord = prescribed_mfrac * mtot
+ ! [clmu] [TempCode] debug
+ print *, "prescribed_mcoord = ", prescribed_mcoord
+
+ allocate(iorder(npart))
+
+ ! sort particles by radius
+ call sort_by_radius(npart,xyzh,iorder,apr_centre(:,1))
+
+ ! [clmu] [TempCode] I assume the above func return the sorted radius in ascending order...?
+ ! let's check that
+ ! DELETE THIS AFTER A FEW SUCCESSFUL RUN WITHOUT TRIGGERING THIS
+ if (rfunc(xyzh(iorder(1),:), apr_centre(:,1)) > rfunc(xyzh(iorder(npart),:), apr_centre(:,1))) then
+    print *, "Error: sort_by_radius result is not in ascending order???"
+ endif
+
+ ! reset the boundary to be at the fixed mass coordinates
+ massri = 0.0
+ if (ref_dir == 1) then
+    j = 2
+ else
+    j = 1
+ endif
+ do i = 1, npart
+    massri = massri + aprmassoftype(igas,apr_level(iorder(i)))
+    if (massri > prescribed_mcoord(j)) then
+      apr_regions(j) = rfunc(xyzh(iorder(i),:),apr_centre(:,1))
+      j = j + 1
+    endif
+ enddo
+
+ ! [clmu] [TempCode] safety check
+ if (ref_dir /= 1 .and. j >= apr_max) then
+    print *, "Array index overflow ", j
+ endif
+
+end subroutine update_apr_regions
+
+!----------------------------------------------------------------
+!+
+!  function returning radius given xyzh
+!+
+!----------------------------------------------------------------
+real function rfunc(xyzh, x0)
+ real, intent(in) :: xyzh(4)
+ real, intent(in), optional :: x0(3)
+
+ if (present(x0)) then
+    rfunc = sqrt((xyzh(1) - x0(1))**2 + (xyzh(2) - x0(2))**2 + (xyzh(3) - x0(3))**2)
+ else
+    rfunc = sqrt(xyzh(1)**2 + xyzh(2)**2 + xyzh(3)**2)
+ endif
+
+end function rfunc
 
 end module apr_region

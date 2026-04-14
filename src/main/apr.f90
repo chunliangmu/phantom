@@ -112,9 +112,9 @@ subroutine init_apr(apr_level,ierr)
  call set_get_apr()
 
  ! initialise the regions
- call set_apr_centre(apr_type,apr_centre,ntrack,track_part)
  if (.not.allocated(apr_regions)) allocate(apr_regions(apr_max),npart_regions(apr_max))
  call set_apr_regions(ref_dir,apr_max,apr_regions,apr_rad,apr_drad)
+ call set_apr_centre(apr_type,apr_centre,ntrack,track_part)
  npart_regions = 0
  icentre = 1 ! to initialise
 
