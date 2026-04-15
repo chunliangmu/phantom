@@ -158,7 +158,7 @@ subroutine read_options_apr(db,nerr)
  call read_inopt(apr_max_in,'apr_max',db,errcount=nerr,min=0)
  call read_inopt(ref_dir,'ref_dir',db,errcount=nerr,min=-1,max=1)
  call read_inopt(split_dir,'split_dir',db,errcount=nerr,min=1,max=3)
- call read_inopt(apr_type,'apr_type',db,errcount=nerr,min=1,max=6)
+ call read_inopt(apr_type,'apr_type',db,errcount=nerr,min=1,max=7)
 
  select case(apr_type)
  case(1)

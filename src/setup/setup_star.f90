@@ -226,10 +226,8 @@ end subroutine read_setupfile
 !+
 !-----------------------------------------------------------------------
 subroutine read_aprsetupfile(filename,ierr)
- use infile_utils,  only:open_db_from_file,inopts,close_db,read_inopt
- use setstar,       only:read_options_stars
- use setunits,      only:read_options_and_set_units
- use apr_region,           only:apr_max_in,ref_dir,apr_type,apr_rad,apr_drad
+ use infile_utils,  only:open_db_from_file,inopts,close_db
+ use utils_apr,     only:read_options_apr
  character(len=*), intent(in)  :: filename
  integer,          parameter   :: lu = 21
  integer,          intent(out) :: ierr
@@ -242,11 +240,7 @@ subroutine read_aprsetupfile(filename,ierr)
  nerr = 0
 
  ! apr options
- call read_inopt(apr_max_in,'apr_max',db,nerr)
- call read_inopt(ref_dir,'ref_dir',db,nerr)
- call read_inopt(apr_type,'apr_type',db,nerr)
- call read_inopt(apr_rad,'apr_rad',db,nerr)
- call read_inopt(apr_drad,'apr_drad',db,nerr)
+ call read_options_apr(db,nerr)
 
  if (nerr > 0) then
     print "(1x,a,i2,a)",'setup_star: ',nerr,' error(s) during read of apr options from .in file'
