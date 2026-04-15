@@ -304,8 +304,7 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
 
  ! Assert (as band-aid solution for my ad-hoc fixes)
  if (apr_max /= 10) then
-    print *, "Error: apr_type==7 currently only support 9 apr_levels at hard-coded location &
-       &ref_dir as false."
+    print *, "Error: apr_type==7 currently only support 9 apr_levels at hard-coded location."
  endif
 
  ! calc mtot since fortran is not cooperating with us getting that in energies.f90
