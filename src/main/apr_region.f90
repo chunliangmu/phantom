@@ -287,7 +287,7 @@ end subroutine create_or_update_apr_clump
 subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regions)
  !use setstar_utils, only: get_mass_coord
  use sortutils, only:sort_by_radius
- use part,      only:igas,apr_level
+ use part,      only:igas,apr_level,isdead_or_accreted
  ! use energies,  only:mtot    ! [clmu] for some reason this is causing a compiler error
  integer, intent(in) :: npart,ref_dir,apr_max
  real, intent(in)    :: xyzh(:,:),aprmassoftype(:,:)
@@ -311,24 +311,19 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
  ! calc mtot since fortran is not cooperating with us getting that in energies.f90
  mtot = 0.0
  do i = 1, npart
+    if (isdead_or_accreted(xyzh(4,i))) cycle
     mtot = mtot + aprmassoftype(igas,apr_level(i))
  enddo
 
  prescribed_mcoord = prescribed_mfrac * mtot
+
  ! [clmu] [TempCode] debug
- print *, "prescribed_mcoord = ", prescribed_mcoord
+ print *, "mtot = ", mtot
 
  allocate(iorder(npart))
 
  ! sort particles by radius
  call sort_by_radius(npart,xyzh,iorder,apr_centre(:,1))
-
- ! [clmu] [TempCode] I assume the above func return the sorted radius in ascending order...?
- ! let's check that
- ! DELETE THIS AFTER A FEW SUCCESSFUL RUN WITHOUT TRIGGERING THIS
- if (rfunc(xyzh(:,iorder(1)), apr_centre(:,1)) > rfunc(xyzh(:,iorder(npart)), apr_centre(:,1))) then
-    print *, "Error: sort_by_radius result is not in ascending order???"
- endif
 
  ! reset the boundary to be at the fixed mass coordinates
  massri = 0.0
@@ -338,17 +333,14 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
     j = 1
  endif
  do i = 1, npart
+    if (isdead_or_accreted(xyzh(4,i))) cycle
     massri = massri + aprmassoftype(igas,apr_level(iorder(i)))
     if (massri > prescribed_mcoord(j)) then
       apr_regions(j) = rfunc(xyzh(:,iorder(i)),apr_centre(:,1))
       j = j + 1
+      if (j >= apr_max .or. (j == apr_max - 1 .and. ref_dir == 1)) exit
     endif
  enddo
-
- ! [clmu] [TempCode] safety check
- if (ref_dir /= 1 .and. j >= apr_max) then
-    print *, "Array index overflow ", j
- endif
 
 end subroutine update_apr_regions
 
