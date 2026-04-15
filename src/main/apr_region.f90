@@ -326,7 +326,7 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
  ! [clmu] [TempCode] I assume the above func return the sorted radius in ascending order...?
  ! let's check that
  ! DELETE THIS AFTER A FEW SUCCESSFUL RUN WITHOUT TRIGGERING THIS
- if (rfunc(xyzh(iorder(1),:), apr_centre(:,1)) > rfunc(xyzh(iorder(npart),:), apr_centre(:,1))) then
+ if (rfunc(xyzh(:,iorder(1)), apr_centre(:,1)) > rfunc(xyzh(:,iorder(npart)), apr_centre(:,1))) then
     print *, "Error: sort_by_radius result is not in ascending order???"
  endif
 
@@ -340,7 +340,7 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
  do i = 1, npart
     massri = massri + aprmassoftype(igas,apr_level(iorder(i)))
     if (massri > prescribed_mcoord(j)) then
-      apr_regions(j) = rfunc(xyzh(iorder(i),:),apr_centre(:,1))
+      apr_regions(j) = rfunc(xyzh(:,iorder(i)),apr_centre(:,1))
       j = j + 1
     endif
  enddo
