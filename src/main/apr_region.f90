@@ -309,11 +309,17 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
 
  ! calc mtot since fortran is not cooperating with us getting that in energies.f90
  mtot = 0.0
+!$omp parallel default(none) &
+!$omp shared(npart,xyzh,aprmassoftype,apr_level) &
+!$omp private(i) &
+!$omp reduction(+:mtot)
+!$omp do
  do i = 1, npart
     if (isdead_or_accreted(xyzh(4,i))) cycle
     mtot = mtot + aprmassoftype(igas,apr_level(i))
  enddo
-
+!$omp enddo
+!$omp end parallel
  prescribed_mcoord = prescribed_mfrac * mtot
 
  ! [clmu] [TempCode] debug
