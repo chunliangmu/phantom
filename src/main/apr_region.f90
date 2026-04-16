@@ -322,9 +322,6 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
 !$omp end parallel
  prescribed_mcoord = prescribed_mfrac * mtot
 
- ! [clmu] [TempCode] debug
- print *, "mtot = ", mtot
-
  allocate(iorder(npart))
 
  ! sort particles by radius
@@ -346,6 +343,9 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
       if (j >= apr_max .or. (j == apr_max - 1 .and. ref_dir == 1)) exit
     endif
  enddo
+
+ ! [clmu] [TempCode] debug
+ print *, "apr_regions: ", apr_regions
 
 end subroutine update_apr_regions
 
