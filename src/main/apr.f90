@@ -529,7 +529,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
  integer :: remainder,icell,n_cell,apri,m,i,ierr
- integer :: eldest,tuther,testp,testpp,n,child_list(12),parent_list(6)
+ integer :: eldest,tuther,testp,testpp,n,child_list(4),parent_list(2)
  real    :: com(3),pmassi,xyzh_fromicentre(3)
  real    :: r_ave,phi_ave,theta_ave,r_part,phi_part,ekin
  real    :: pos_com(3),vel_com(3),am(3),ogen,ogam(3),am_term(3)
@@ -540,8 +540,8 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  logical :: spherical
  type(cellforce)        :: cell
 
- ! First ensure that we're only sending in groups of 12 to the tree
- remainder = modulo(nmerge,12)
+ ! First ensure that we're only sending in groups of 4 to the tree
+ remainder = modulo(nmerge,4)
  nmerge = nmerge - remainder
 
  call build_tree(nmerge,nmerge,xyzh_merge(:,1:nmerge),vxyzu_merge(:,1:nmerge),&
@@ -593,13 +593,13 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
     ! If the apr level based on the com is lower than the current level,
     ! we merge!
     if (apri < current_apr) then
-       ! here we take 12 particles from each leaf in the tree and combine these into six new particles
+       ! here we take 4 particles from each leaf in the tree and combine these into 2 new particles
        ! the new particles are constructed to conserve the average properties of the children
 
        pmassi = aprmassoftype(igas,apr_level(inodeparts(inoderange(1,icell)))) ! this *current* mass is correct
        ! because only particles to merge are sent in
 
-       ! start by calculating (or using) the average properties of the 12 children
+       ! start by calculating (or using) the average properties of the 4 children
        pos_com = 0.
        vel_com(:) = 0.
        am(:) = 0.
@@ -727,7 +727,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
 
        enddo
 
-       nkilled = nkilled + 12 ! this refers to the number of children killed
+       nkilled = nkilled + 4 ! this refers to the number of children killed
 
        ! now adjust the particle positions accordingly - we adjust away from com later
        ! particle 1:
