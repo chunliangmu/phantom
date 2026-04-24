@@ -28,7 +28,7 @@ contains
 subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  use part,              only:nptmass,xyzmh_ptmass,vxyz_ptmass,ihacc,ihsoft,igas,&
                              delete_dead_or_accreted_particles,mhd,rhoh,shuffle_part,&
-                             kill_particle,copy_particle
+                             kill_particle,copy_particle,aprmassoftype,apr_level
  use setbinary,         only:set_binary
  use units,             only:umass,udist,utime
  use physcon,           only:au,solarm,solarr,gg,pi
@@ -41,11 +41,12 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  use infile_utils,      only:open_db_from_file,inopts,read_inopt,close_db
  use table_utils,       only:yinterp
  use readwrite_mesa,    only:read_mesa
- use dim,               only:maxptmass,maxp,nsinkproperties
+ use dim,               only:maxptmass,maxp,nsinkproperties,use_apr
  use io,                only:fatal,idisk1,iprint
  use timestep,          only:tmax,dtmax
  use readwrite_dumps,   only:read_dump
  use eos,               only:X_in,Z_in
+ use apr,               only:init_apr
 
  integer, intent(inout)    :: npart
  integer, intent(inout)    :: npartoftype(:)
@@ -66,6 +67,8 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  character(len=20)         :: filename = 'binary.in'
  character(len=100)        :: densityfile,dumpname
  type(inopts), allocatable :: db(:)
+
+ if (use_apr) call init_apr(apr_level,ierr)
 
  if (nptmass > 3) then
     call fatal('moddump_binary','Number of sink particles > 3')
@@ -184,7 +187,14 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
        nptmass1 = nptmass
        nstar1 = npart
        pmass1 = massoftype(igas)
-       m1 = nstar1 * pmass1
+       if (use_apr) then
+          m1 = 0.
+          do i=1,nstar1
+             m1 = m1 + aprmassoftype(igas,apr_level(i))
+          enddo
+       else
+          m1 = nstar1 * pmass1
+       endif
        if (nptmass1 > 1) then
           call fatal('moddump_binary', 'unexpected number of sink particles in dump file (nptmass > 1)')
        elseif (nptmass1 == 1) then  ! there is a sink stellar core
