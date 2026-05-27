@@ -138,6 +138,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  use dim,        only:maxp,ind_timesteps,maxvxyzu
  use part,       only:ntot,isdead_or_accreted,igas,aprmassoftype,&
                     shuffle_part,iphase,iactive,maxp
+ use part,       only:igasP,rhoh,eos_vars,iorig
  use quitdump,   only:quit
  use relaxem,    only:relax_particles
  use utils_apr,  only:find_closest_region,icentre
@@ -145,6 +146,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  use io,         only:fatal
  use get_apr_level, only:get_apr,create_or_update_apr_clump
  use io_summary, only:iosum_apr,print_apr
+ use eos,        only:gamma
  real,    intent(inout)         :: xyzh(:,:),vxyzu(:,:),fxyzu(:,:)
  integer, intent(inout)         :: npart
  integer(kind=1), intent(inout) :: apr_level(:)
@@ -153,7 +155,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  real, allocatable :: xyzh_ref(:,:),force_ref(:,:),pmass_ref(:)
  real, allocatable :: xyzh_merge(:,:),vxyzu_merge(:,:)
  integer, allocatable :: relaxlist(:),mergelist(:),iclosest
- real :: get_apr_in(3)
+ real :: get_apr_in(3),ientropy,P_i,pmassi,rhoi
 
  ! if this routine doesn't need to be used, just skip it
  if (apr_max == 1) return
@@ -170,6 +172,13 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
  ! Just a metric
  if (apr_verbose) print*,'original npart is',npart
+
+ ! initialise for the entropy storage
+ if (allocated(entropy_list)) deallocate(entropy_list,entropy_stored)
+ allocate(entropy_list(maxp*3),entropy_stored(maxp*3))
+ entropy_count = 0
+ entropy_list(:) = 0
+ entropy_stored = 0.
 
  ! Before adjusting the particles, if we're going to
  ! relax them then let's save the reference particles
@@ -224,6 +233,10 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
           ! if the level it should have is greater than the
           ! level it does have, increment it up one
           if (apri > apr_current) then
+             pmassi = aprmassoftype(igas,apr_current)
+             P_i = eos_vars(igasP,ii)
+             rhoi = rhoh(xyzh(4,ii),pmassi)
+             ientropy = pmassi*(P_i*rhoi**(-gamma))
              call splitpart(ii,npartnew)
              if (do_relax .and. (gr .or. apri == top_level)) then
                 nrelax = nrelax + 2
@@ -231,6 +244,10 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
                 relaxlist(nrelax)   = npartnew
              endif
              nsplit_total = nsplit_total + 1
+             entropy_count = entropy_count + 2
+             entropy_stored(entropy_count - 1:entropy_count) = 0.5*ientropy ! because we share it across both evenly
+             entropy_list(entropy_count - 1) = iorig(ii)
+             entropy_list(entropy_count) = iorig(npartnew)
           endif
        enddo split_over_active
     enddo
@@ -279,7 +296,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
        ! Now send them to be merged
        if (nmerge > 11) call merge_with_special_tree(nmerge,mergelist(1:nmerge),xyzh_merge(:,1:nmerge),&
                                             vxyzu_merge(:,1:nmerge),kk,xyzh,vxyzu,apr_level,nkilled,&
-                                            nrelax,relaxlist,npartnew)
+                                            nrelax,relaxlist,npartnew,entropy_list,entropy_count,entropy_stored)
        nmerge_total = nmerge_total + nkilled ! actually merged
        if (apr_verbose) then
           print*,'merged: ',nkilled,kk
@@ -292,6 +309,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  npart = npartnew
  npart_regions(1) = npartnew - sum(npart_regions(2:apr_max))
  if (apr_verbose) print*,'particles at each level:',npart_regions(:)
+
 
  ! If we need to relax, do it here
  if (nrelax > 0 .and. do_relax) call relax_particles(npart,n_ref,xyzh_ref,force_ref,nrelax,relaxlist)
@@ -512,21 +530,24 @@ end subroutine splitpart
 !+
 !-----------------------------------------------------------------------
 subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,current_apr,&
-                                     xyzh,vxyzu,apr_level,nkilled,nrelax,relaxlist,npartnew)
+                                     xyzh,vxyzu,apr_level,nkilled,nrelax,relaxlist,npartnew,&
+                                     entropy_list,entropy_count,entropy_stored)
  use neighkdtree,   only:build_tree,ncells,leaf_is_active,get_cell_location
  use mpiforce,      only:cellforce
  use kdtree,        only:inodeparts,inoderange
- use part,          only:kill_particle,igas
- use part,          only:combine_two_particles,aprmassoftype
+ use part,          only:kill_particle,igas,igasP,igamma,eos_vars,rhoh
+ use part,          only:combine_two_particles,aprmassoftype,iorig
  use dim,           only:ind_timesteps,maxvxyzu
  use get_apr_level, only:get_apr
  use physcon,       only:pi
  use utils_apr,     only:apr_centre
  use vectorutils, only:cross_product3D,matrixinvert3D
+ use eos,           only:gamma
  integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew
+ integer,         intent(inout) :: entropy_list(:),entropy_count
  integer(kind=1), intent(inout) :: apr_level(:)
  integer,         intent(in)    :: current_apr,mergelist(:)
- real,            intent(inout) :: xyzh(:,:),vxyzu(:,:)
+ real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
  integer :: remainder,icell,n_cell,apri,m,i,ierr
  integer :: eldest,tuther,testp,testpp,n,child_list(12),parent_list(6)
@@ -537,6 +558,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  real    :: test_a,test_b,test_c,vec_a(3),vec_b(3),vec_c(3),u(3),v(3),w(3)
  real    :: lm(3),iner(3,3),lm_ave(3),term(3),omega(3),delta_ekin
  real    :: alpha,alpha1,alpha2,discriminant,A,B,C,un(3)
+ real    :: ientropy, rho_eldest, rho_tuther, P_eldest, P_tuther, gammai
  logical :: spherical
  type(cellforce)        :: cell
 
@@ -706,6 +728,17 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
        do m = 1,(n_cell/2)
           eldest = mergelist(inodeparts(inoderange(1,icell) + m - 1)) ! remember we're running off the mergelist
           tuther = mergelist(inodeparts(inoderange(1,icell) + m + 5)) ! + 5
+
+          ! save the entropy - we need this saved for later
+          rho_eldest = rhoh(xyzh(4,eldest),pmassi*0.5) ! I don't know why 0.5 is required here?!
+          rho_tuther = rhoh(xyzh(4,tuther),pmassi*0.5)
+          P_eldest = eos_vars(igasP,eldest)
+          P_tuther = eos_vars(igasP,tuther)
+          gammai = gamma
+          ientropy = 0.5*pmassi*((P_eldest*rho_eldest**(-gammai)) + (P_tuther*rho_tuther**(-gammai)))
+          entropy_count = entropy_count + 1
+          entropy_stored(entropy_count) = ientropy
+          entropy_list(entropy_count) = iorig(eldest)
 
           ! discard tuther ("the other")
           call combine_two_particles(eldest,tuther)
