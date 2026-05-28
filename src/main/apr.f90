@@ -635,7 +635,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           pos_com(:) = pos_com(:) + xyzh_merge(1:3,i)
           ekin = ekin + 0.5*pmassi*(vxyzu_merge(1,i)**2 &
                  + vxyzu_merge(2,i)**2 + vxyzu_merge(3,i)**2)
-          lm(:) = lm(:) + pmassi*vxyzu_merge(:,i)
+          lm(:) = lm(:) + pmassi*vxyzu_merge(1:3,i)
        enddo
 
        vel_com(:) = vel_com(:)/real(n_cell)

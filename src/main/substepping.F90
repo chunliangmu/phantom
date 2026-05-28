@@ -914,6 +914,12 @@ subroutine get_force(nptmass,npart,nsubsteps,ntypes,timei,dtextforce,xyzh,vxyzu,
           else
              pmassi = massoftype(itype)
           endif
+       else
+          if (use_apr) then
+             pmassi = aprmassoftype(itype,apr_level(i))
+          else
+             pmassi = massoftype(itype)
+          endif
        endif
        fextx = 0.
        fexty = 0.
