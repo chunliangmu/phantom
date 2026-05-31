@@ -29,7 +29,7 @@ module utils_apr
 
  implicit none
 
- public :: read_options_apr,write_options_apr
+ public :: read_options_apr,write_options_apr,adjust_entropy
 
  ! default values for runtime parameters are stored here
  integer :: apr_max_in = 3, ref_dir = 1, apr_type = 1, apr_max = 4
@@ -40,6 +40,9 @@ module utils_apr
  real :: apr_rad = 1.0, apr_drad = 0.1, apr_centre_in(3) = 0.
  real, allocatable :: apr_regions(:), apr_centre(:,:)
  real, save :: apr_H(2,100)  ! we enforce this to be 100
+ real, allocatable :: entropy_stored(:)
+ integer, allocatable :: entropy_list(:)
+ integer :: entropy_count
 
  logical :: apr_region_is_circle = .false.
 
@@ -247,5 +250,35 @@ subroutine write_aprtrack(tdump,dumpfile)
  enddo
 
 end subroutine write_aprtrack
+
+
+!-----------------------------------------------------------------------
+!+
+!  Resets the entropy on the new particles to the saved value -
+!  this is called *after* dens
+!+
+!-----------------------------------------------------------------------
+subroutine adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
+ use eos, only: gamma
+ use part, only: rhoh,igasP,igas,aprmassoftype,ics,iorig
+ real,    intent(in) :: xyzh(:,:)
+ real,    intent(inout) :: vxyzu(:,:)
+ integer(kind=1), intent(in) :: apr_level(:)
+ real,    intent(inout) :: eos_vars(:,:)
+ integer :: i,ii
+ real    :: pmassi,rhoi
+
+
+ do i = 1, entropy_count
+    ii = findloc(iorig,entropy_list(i),dim=1) ! this is the actual particle number
+    pmassi = aprmassoftype(igas,apr_level(ii))
+    rhoi = rhoh(xyzh(4,ii),pmassi)
+    eos_vars(igasP,ii) = entropy_stored(i)*rhoi**(gamma)/pmassi       ! reset Pressure
+    vxyzu(4,ii) = eos_vars(igasP,ii)/((gamma - 1.) * rhoi)            ! reset internal energy
+    eos_vars(ics,ii) = sqrt(gamma*eos_vars(igasP,ii)/rhoi)           ! and reset sound speed
+ enddo
+
+
+end subroutine adjust_entropy
 
 end module utils_apr

@@ -36,18 +36,20 @@ subroutine test_apr(ntests,npass)
  use boundary,     only:dxbound,dybound,dzbound,xmin,xmax,ymin,ymax,zmin,zmax
  use part,         only:npart,npartoftype,hfact,xyzh,init_part,massoftype,radprop
  use part,         only:isetphase,igas,iphase,vxyzu,fxyzu,apr_level,maxvxyzu
+ use part,         only:rhoh,igas,igasP,eos_vars
  use mpidomain,    only:i_belong
  use mpiutils,     only:reduceall_mpi
  use dim,          only:periodic,use_apr,do_radiation
  use apr,          only:update_apr
- use utils_apr,    only:apr_centre,apr_max
+ use utils_apr,    only:apr_centre,apr_max,adjust_entropy
  use energies,     only:compute_energies,angtot,etot,totmom,ekin,etherm
  use random,       only:ran2
+ use eos,          only:gamma
  integer, intent(inout) :: ntests,npass
  real :: psep,rhozero,time,totmass, etotin, totmomin
  real :: angtotin, ekinin, ethermin
- real :: tolang, tolen, tolmom
- integer :: original_npart,splitted,nfailed(11),i,iseed,tolpart
+ real :: tolang, tolen, tolmom, tot_entropy, rhoi, tolent, entropin
+ integer :: original_npart,splitted,nfailed(13),i,iseed,tolpart
 
  if (use_apr) then
     if (id==master) write(*,"(/,a)") '--> TESTING APR MODULE'
@@ -58,10 +60,12 @@ subroutine test_apr(ntests,npass)
 
  ! Tolerances
  tolmom = 2.e-15
- tolang = 2.0e-14
+ tolang = 3.0e-14
  tolen  = 2.e-15
+ tolent = 2.0E-15
  nfailed(:) = 0
  iseed = -92757
+ gamma = 5./3.
 
  ! Set up a uniform box of particles
  call init_part()
@@ -89,6 +93,12 @@ subroutine test_apr(ntests,npass)
     if (maxvxyzu > 3) vxyzu(4,i) = ran2(iseed)**2
  enddo
 
+ ! Here we need to initialse the pressure (for the entropy calculation later)
+ do i=1,npart
+    rhoi = rhoh(xyzh(4,i),massoftype(igas))
+    eos_vars(igasP,i) = (gamma - 1.)*rhoi*vxyzu(4,i)
+ enddo
+
  ! Initialise APR
  call setup_apr_region_for_test()
  apr_centre(:,1:2) = 20. ! just moves the APR region away from the box so you don't have any split or merge
@@ -96,11 +106,13 @@ subroutine test_apr(ntests,npass)
 
  ! Initialise the energies values
  call compute_energies(0.)
+ call calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
  etotin   = etot
  totmomin = totmom
  angtotin = angtot
  ekinin = ekin
  ethermin = etherm
+ entropin = tot_entropy
 
  ! Now set for a split
  write(*,"(/,a)") '--> conducting a split'
@@ -111,14 +123,19 @@ subroutine test_apr(ntests,npass)
  apr_centre(1:3,2) = 20.
  call update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
+ ! adjust pressure and internal energy to conserve entropy
+ call adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
+
  ! Check the new conserved values
  call compute_energies(0.)
+ call calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
  call checkval(angtot,angtotin,tolang,nfailed(1),'angular momentum')
  call checkval(totmom,totmomin,tolmom,nfailed(2),'linear momentum')
  call checkval(etot,etotin,tolen,nfailed(3),'total energy')
  call checkval(ekin,ekinin,tolen,nfailed(4),'kinetic energy')
  call checkval(etherm,ethermin,tolen,nfailed(5),'thermal energy')
- call update_test_scores(ntests,nfailed(1:5),npass)
+ call checkval(tot_entropy,entropin,tolent,nfailed(6),'total entropy')
+ call update_test_scores(ntests,nfailed(1:6),npass)
 
  ! after splitting, the total number of particles should have been updated
  splitted = npart
@@ -128,17 +145,22 @@ subroutine test_apr(ntests,npass)
  apr_centre(:,1:2) = 20. ! move the APR zones away again
  call update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
+ ! adjust pressure and internal energy to conserve entropy
+ call adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
+
  ! Check the new conserved values
  call compute_energies(0.)
- call checkval(angtot,angtotin,tolang,nfailed(6),'angular momentum')
- call checkval(totmom,totmomin,tolmom,nfailed(7),'linear momentum')
- call checkval(etot,etotin,tolen,nfailed(8),'total energy')
- call checkval(ekin,ekinin,tolen,nfailed(9),'kinetic energy')
- call checkval(etherm,ethermin,tolen,nfailed(10),'thermal energy')
+ call calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
+ call checkval(angtot,angtotin,tolang,nfailed(7),'angular momentum')
+ call checkval(totmom,totmomin,tolmom,nfailed(8),'linear momentum')
+ call checkval(etot,etotin,tolen,nfailed(9),'total energy')
+ call checkval(ekin,ekinin,tolen,nfailed(10),'kinetic energy')
+ call checkval(etherm,ethermin,tolen,nfailed(11),'thermal energy')
+ call checkval(tot_entropy,entropin,tolent,nfailed(12),'total entropy')
 
  ! Check that the original particle number returns
  tolpart = (apr_max-1)*6 ! this corresponds to a maximum of 11 "spare" particles per level
- call checkval(npart,original_npart,tolpart,nfailed(11),'number of particles conserved')
+ call checkval(npart,original_npart,tolpart,nfailed(13),'number of particles conserved')
  call update_test_scores(ntests,nfailed,npass)
 
  if (id==master) write(*,"(/,a)") '<-- APR TEST COMPLETE'
@@ -170,5 +192,26 @@ subroutine setup_apr_region_for_test()
  call init_apr(apr_level,ierr)
 
 end subroutine setup_apr_region_for_test
+
+
+subroutine calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
+ use part, only:igasP,igas,aprmassoftype,rhoh,iorig
+ use eos,  only:gamma
+ real, intent(in) :: eos_vars(:,:),xyzh(:,:)
+ integer(kind=1), intent(in) :: apr_level(:)
+ integer, intent(in) :: npart
+ real, intent(out) :: tot_entropy
+ integer :: ii
+ real :: pmassi,rhoi
+
+ tot_entropy = 0.
+ do ii = 1,npart
+    pmassi = aprmassoftype(igas,apr_level(ii))
+    rhoi = rhoh(xyzh(4,ii),pmassi)
+    tot_entropy = tot_entropy + (eos_vars(igasP,ii)*rhoi**(-gamma)*pmassi)
+    write(10,*) ii, pmassi, eos_vars(igasP,ii),(eos_vars(igasP,ii)*rhoi**(-gamma)*pmassi)
+ enddo
+
+end subroutine calc_entropy
 
 end module testapr

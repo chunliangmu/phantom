@@ -39,7 +39,7 @@ subroutine derivs(icall,npart,nactive,xyzh,vxyzu,fxyzu,fext,divcurlv,divcurlB,&
                   dustevol,ddustevol,filfac,dustfrac,eos_vars,time,dt,dtnew,pxyzu,&
                   dens,metrics,apr_level)
  use dim,            only:mhd,fast_divcurlB,gr,periodic,do_radiation,driving,&
-                          sink_radiation,use_dustgrowth,ind_timesteps,isothermal
+                          sink_radiation,use_dustgrowth,ind_timesteps,isothermal,use_apr
  use io,             only:iprint,fatal,error
  use neighkdtree,    only:build_tree
  use densityforce,   only:densityiterate
@@ -61,6 +61,7 @@ subroutine derivs(icall,npart,nactive,xyzh,vxyzu,fxyzu,fext,divcurlv,divcurlB,&
  use metric_tools,   only:init_metric
  use radiation_implicit, only:do_radiation_implicit,ierr_failed_to_converge
  use options,        only:implicit_radiation,implicit_radiation_store_drad,use_porosity,need_pressure_on_sinks
+ use utils_apr,      only:adjust_entropy
  integer,      intent(in)    :: icall
  integer,      intent(inout) :: npart
  integer,      intent(in)    :: nactive
@@ -142,6 +143,11 @@ subroutine derivs(icall,npart,nactive,xyzh,vxyzu,fxyzu,fext,divcurlv,divcurlB,&
     endif
     set_boundaries_to_active = .false.     ! boundary particles are no longer treated as active
     call do_timing('dens',tlast,tcpulast)
+ endif
+
+ ! edit the entropy values if using apr
+ if (use_apr) then
+    call adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
  endif
 
  if (gr) then

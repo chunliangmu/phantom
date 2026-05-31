@@ -266,7 +266,7 @@ ifeq ($(KROME), yes)
     LDFLAGS  += -llapack
 endif
 
-SRCAPR=utils_apr.f90 relaxem.f90 apr_region.f90 get_apr_level.f90 apr.f90
+SRCAPR=relaxem.f90 apr_region.f90 get_apr_level.f90 apr.f90
 ifeq ($(APR), yes)
     FPPFLAGS += -DAPR
     KERNEL=WendlandC2
@@ -514,7 +514,7 @@ SOURCES= physcon.f90 ${CONFIG} ${SRCKERNEL} io.F90 units.f90 \
          ${SRCKROME} memory.f90 ${SRCRW_DUMPS} ${SRCINJECT} injection.f90 \
          H2regions.f90 subgroup.f90 \
          quitdump.f90 dens.F90\
-         ptmass.F90 force.F90 deriv.f90 ${SRCAPR} readwrite_infile.f90 energies.f90 sort_particles.f90 \
+         ptmass.F90 utils_apr.f90 force.F90 deriv.f90 ${SRCAPR} readwrite_infile.f90 energies.f90 sort_particles.f90 \
          utils_shuffleparticles.F90 evwrite.f90 substepping.F90 step_leapfrog.f90 writeheader.f90 ${SRCAN} \
          mf_write.f90 egg.f90 evolve_utils.F90 evolve.f90 utils_linalg.f90 \
          checksetup.f90 initial.F90
@@ -663,7 +663,7 @@ SRCSPLITPART=utils_indtimesteps.f90 utils_getneighbours.F90 utils_splitmerge.f90
 #----------------------------------------------------
 # phantom test suite
 # 22/4/24: added setup_params to avoid weird build failure with ifort on Mac OS
-SRCTESTS=utils_testsuite.f90 test_kernel.f90 \
+SRCTESTS=utils_testsuite.f90 test_kernel.f90 utils_apr.f90\
          ${SRCAPR} test_apr.f90 test_dust.f90 test_growth.f90 test_smol.F90 \
          test_nonidealmhd.f90 directsum.f90 test_gravity.f90 \
          test_derivs.f90 test_cooling.f90 test_eos_stratified.f90 \
