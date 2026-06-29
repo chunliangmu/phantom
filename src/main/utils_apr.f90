@@ -270,6 +270,7 @@ subroutine adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
 
  do i = 1, entropy_count
     ii = findloc(iorig,entropy_list(i),dim=1) ! this is the actual particle number
+    if (ii==0) continue
     pmassi = aprmassoftype(igas,apr_level(ii))
     rhoi = rhoh(xyzh(4,ii),pmassi)
     eos_vars(igasP,ii) = entropy_stored(i)*rhoi**(gamma)/pmassi       ! reset Pressure
