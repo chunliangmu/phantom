@@ -549,7 +549,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  integer,         intent(in)    :: current_apr,mergelist(:)
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
- integer :: remainder,icell,n_cell,apri,m,i,ierr
+ integer :: remainder,icell,n_cell,apri,m,i,ierr,k,already_stored
  integer :: eldest,tuther,testp,testpp,n,child_list(12),parent_list(6)
  real    :: com(3),pmassi,xyzh_fromicentre(3)
  real    :: r_ave,phi_ave,theta_ave,r_part,phi_part,ekin
@@ -736,9 +736,18 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           P_tuther = eos_vars(igasP,tuther)
           gammai = gamma
           ientropy = 0.5*pmassi*((P_eldest*rho_eldest**(-gammai)) + (P_tuther*rho_tuther**(-gammai)))
-          entropy_count = entropy_count + 1
-          entropy_stored(entropy_count) = ientropy
-          entropy_list(entropy_count) = iorig(eldest)
+          ! check to see if this particle has already been merged and is on the list
+          already_stored = -1
+          do k = 1, entropy_count
+             if (entropy_list(k) == iorig(eldest)) already_stored = k
+          enddo
+          if (already_stored < 0) then
+             entropy_count = entropy_count + 1
+             entropy_stored(entropy_count) = ientropy
+             entropy_list(entropy_count) = iorig(eldest)
+          else
+             entropy_stored(k) = ientropy
+          endif
 
           ! discard tuther ("the other")
           call combine_two_particles(eldest,tuther)
