@@ -2554,7 +2554,7 @@ subroutine ptmass_calc_enclosed_mass(nptmass,npart,xyzh)
     enddo
     !$omp end parallel do
     if (use_apr) then
-       xyzmh_ptmass(imassenc,i) = wi * aprmassoftype(igas,apr_level(j))
+       xyzmh_ptmass(imassenc,i) = wi * aprmassoftype(igas,apr_level(i))
     else
        xyzmh_ptmass(imassenc,i) = wi * massoftype(igas)
     endif

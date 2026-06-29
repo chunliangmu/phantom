@@ -740,6 +740,9 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           already_stored = -1
           do k = 1, entropy_count
              if (entropy_list(k) == iorig(eldest)) already_stored = k
+             ! this is in case it's been merged before, it's about to be killed
+             ! by setting it to -1, it shouldn't be identified in adjust_entropy routine
+             if (entropy_list(k) == iorig(tuther)) entropy_list(k) = -1
           enddo
           if (already_stored < 0) then
              entropy_count = entropy_count + 1
