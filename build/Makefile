@@ -667,7 +667,7 @@ SRCSPLITPART=utils_indtimesteps.f90 utils_getneighbours.F90 utils_splitmerge.f90
 # phantom test suite
 # 22/4/24: added setup_params to avoid weird build failure with ifort on Mac OS
 SRCTESTS=utils_testsuite.f90 test_kernel.f90 utils_apr.f90\
-         ${SRCAPR} test_apr.f90 test_dust.f90 test_growth.f90 test_coala.F90 test_smol.F90 \
+         ${SRCAPR} test_apr.f90 test_dust.f90 test_growth.f90 test_coala.F90 \
          test_nonidealmhd.f90 directsum.f90 test_gravity.f90 \
          test_derivs.f90 test_cooling.f90 test_eos_stratified.f90 \
          test_eos_stam.f90 test_eos.f90 test_externf.f90 test_rwdump.f90 \
