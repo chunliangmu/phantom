@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -195,8 +195,8 @@ subroutine read_setupfile(filename,ierr)
  use setstar,       only:read_options_stars
  use setunits,      only:read_options_and_set_units
  character(len=*), intent(in)  :: filename
- integer,          parameter   :: lu = 21
  integer,          intent(out) :: ierr
+ integer,          parameter   :: lu = 21
  integer                       :: nerr
  type(inopts), allocatable     :: db(:)
 
@@ -229,8 +229,8 @@ subroutine read_aprsetupfile(filename,ierr)
  use infile_utils,  only:open_db_from_file,inopts,close_db
  use utils_apr,     only:read_options_apr
  character(len=*), intent(in)  :: filename
- integer,          parameter   :: lu = 21
  integer,          intent(out) :: ierr
+ integer,          parameter   :: lu = 21
  integer                       :: nerr
  type(inopts), allocatable     :: db(:)
 

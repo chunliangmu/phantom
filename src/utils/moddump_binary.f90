@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -48,10 +48,10 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  use eos,               only:X_in,Z_in
  use apr,               only:init_apr
 
- integer, intent(inout)    :: npart
- integer, intent(inout)    :: npartoftype(:)
- real,    intent(inout)    :: massoftype(:)
- real,    intent(inout)    :: xyzh(:,:),vxyzu(:,:)
+ integer, intent(inout) :: npart
+ integer, intent(inout) :: npartoftype(:)
+ real,    intent(inout) :: massoftype(:)
+ real,    intent(inout) :: xyzh(:,:),vxyzu(:,:)
  integer                   :: i,ierr,setup_case,ioption=1,irhomax,n
  integer                   :: iremove = 2
  integer                   :: nstar1,nstar2,nptmass1,nptmass2,iprim,isec
@@ -62,7 +62,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  real                      :: mcut,rcut,Mstar,radi,rhopart,rhomax = 0.0
  real                      :: time2,hfact2
  real                      :: xyzmh1_stash(nsinkproperties),xyzmh2_stash(nsinkproperties),vxyz1_stash(3),vxyz2_stash(3)
- real, allocatable         :: r(:),den(:),pres(:),temp(:),enitab(:),Xfrac(:),Yfrac(:),m(:)
+ real, allocatable         :: r(:),den(:),pres(:),temp(:),enitab(:),Xfrac(:),Yfrac(:),mu(:),m(:)
  logical                   :: use_corotating_frame,iprimary_grav_ans
  character(len=20)         :: filename = 'binary.in'
  character(len=100)        :: densityfile,dumpname
@@ -342,7 +342,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
        call prompt('Enter mass of the created point mass core', mcut)
        call prompt('Enter softening length of the point mass', hsoft_default)
 
-       call read_mesa(densityfile,den,r,pres,m,enitab,temp,X_in,Z_in,Xfrac,Yfrac,Mstar,ierr,cgsunits=.false.)
+       call read_mesa(densityfile,den,r,pres,m,enitab,temp,X_in,Z_in,Xfrac,Yfrac,mu,Mstar,ierr,cgsunits=.false.)
        rcut = yinterp(r,m,mcut)
 
        irhomax = 1
@@ -609,9 +609,9 @@ subroutine set_sinkproperties(xyzmh_ptmass)
  use prompting,  only:prompt
  use dim,        only:nsinkproperties
  use io,         only:iprint
+ real, intent(inout) :: xyzmh_ptmass(:,:)
  integer :: i,j,iselect,ioption
  real    :: fac,var
- real,    intent(inout) :: xyzmh_ptmass(:,:)
  character(len=100)        :: dumpname
 
  do i = 1,nptmass
@@ -658,10 +658,10 @@ subroutine transform_from_corotating_to_inertial_frame(xyzh,vxyzu,npart,nptmass,
            omega_corotate,xyzmh_ptmass,vxyz_ptmass)
  use options,     only:iexternalforce
  use vectorutils, only:cross_product3D
- integer, intent(in) :: npart,nptmass
- real, intent(in) :: omega_corotate,xyzh(:,:),xyzmh_ptmass(:,:)
- real, intent(inout) :: vxyzu(:,:),vxyz_ptmass(:,:)
- real, dimension(3) :: omega_vec,omegacrossr
+ integer, intent(in)    :: npart,nptmass
+ real,    intent(in)    :: omega_corotate,xyzh(:,:),xyzmh_ptmass(:,:)
+ real,    intent(inout) :: vxyzu(:,:),vxyz_ptmass(:,:)
+ real :: omega_vec(3),omegacrossr(3)
  integer :: i
 
  iexternalforce = 0
