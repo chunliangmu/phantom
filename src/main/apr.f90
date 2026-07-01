@@ -513,14 +513,16 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  use utils_apr,     only:apr_centre
  use vectorutils, only:cross_product3D,matrixinvert3D
  use eos,           only:gamma
- integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew
- integer,         intent(inout) :: entropy_list(:),entropy_count
+ integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew,entropy_count
+ integer(kind=8), intent(inout) :: entropy_list(:)
  integer(kind=1), intent(inout) :: apr_level(:)
  integer,         intent(in)    :: current_apr,mergelist(:)
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
- integer :: remainder,icell,n_cell,apri,m,i,ierr,k,already_stored
+ integer :: remainder,icell,n_cell,apri,m,i,ierr,k,already_stored,localtmp
  integer :: eldest,tuther,testp,testpp,n,child_list(12),parent_list(6)
+ integer,         allocatable :: apri_at_cells_com(:)
+ real,            allocatable :: cells_com(:,:)
  real    :: com(3),pmassi,xyzh_fromicentre(3)
  real    :: r_ave,phi_ave,theta_ave,r_part,phi_part,ekin
  real    :: pos_com(3),vel_com(3),am(3),ogen,ogam(3),am_term(3)
@@ -528,7 +530,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  real    :: test_a,test_b,test_c,vec_a(3),vec_b(3),vec_c(3),u(3),v(3),w(3)
  real    :: lm(3),iner(3,3),lm_ave(3),term(3),omega(3),delta_ekin
  real    :: alpha,alpha1,alpha2,discriminant,A,B,C,un(3)
- real    :: ientropy, rho_eldest, rho_tuther, P_eldest, P_tuther, gammai
+ real    :: ientropy_tuther, rho_eldest, rho_tuther, P_eldest, P_tuther, gammai
  logical :: spherical
  type(cellforce)        :: cell
 
@@ -539,14 +541,19 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  call build_tree(nmerge,nmerge,xyzh_merge(:,1:nmerge),vxyzu_merge(:,1:nmerge),&
                       for_apr=.true.)
 
- ! Now use the centre of mass of each cell to check whether it should
- ! be merged or not
- com = 0.
- over_cells: do icell=1,int(ncells)
-    if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
+ allocate(cells_com(3,ncells),apri_at_cells_com(ncells))
+
+ ! get the center of the cell
+ !$omp parallel do default(none) &
+ !$omp shared(ncells,leaf_is_active,inoderange,inodeparts,spherical) &
+ !$omp shared(xyzh_merge,apr_centre,icentre,cells_com) &
+ !$omp private(icell,n_cell,com,m,i) &
+ !$omp private(cell,r_ave,theta_ave,phi_ave,r_part,phi_part,xyzh_fromicentre)
+ over_cells_part0: do icell=1,int(ncells)
+    if (leaf_is_active(icell) == 0) cycle over_cells_part0 !--skip empty cells
     n_cell = inoderange(2,icell)-inoderange(1,icell)+1
 
-    spherical = .true.
+    com = 0.
     if (.not.spherical) then
        ! if not using spherical coordinates to check the cell location, just use existing info
        call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
@@ -579,8 +586,39 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
        com(3) = r_ave*cos(theta_ave)
        com(:) = com(:) + apr_centre(1:3,icentre) ! for sending back into get_apr
     endif
+    cells_com(:,icell) = com
+ enddo over_cells_part0
+ 
+ ! not sure how to parallelize this, so I am just gonna run it separately
+ over_cells_part1: do icell=1,int(ncells)
+    if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
+    call get_apr(cells_com(1:3,icell),icentre,apri)
+    apri_at_cells_com(i) = apri
+ enddo over_cells_part1
 
-    call get_apr(com(1:3),icentre,apri)
+ ! Now use the centre of mass of each cell to check whether it should
+ ! be merged or not
+ spherical = .true.
+ !$omp parallel do default(none) &
+ !$omp shared(xyzh,vxyzu,iorig,ncells,leaf_is_active,inoderange,inodeparts,spherical) &
+ !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist) &
+ !$omp shared(apr_centre,current_apr,aprmassoftype,mergelist,eos_vars,gamma) &
+ !$omp shared(apr_level,xyzh_merge,vxyzu_merge,entropy_count,entropy_list,entropy_stored) &
+ !$omp private(icell,n_cell,i,m,u,v,w,vec_a,vec_b,vec_c,test_a,test_b,test_c,testp,testpp,ierr) &
+ !$omp private(pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
+ !$omp private(apri,pmassi,ogen,ogam,Q,pdash,qdash,det,phi,lamb,es,un,iner,inv_iner,omega) &
+ !$omp private(r_part,sum_temp,s_min,S,gammai,parent_list,already_stored,localtmp,term) &
+ !$omp private(A,B,C,discriminant,alpha,alpha1,alpha2) &
+ !$omp private(eldest,rho_eldest,P_eldest) &
+ !$omp private(tuther,rho_tuther,P_tuther,ientropy_tuther) &
+ !$omp firstprivate(com) &
+ !$omp reduction(+:nkilled)
+ over_cells: do icell=1,int(ncells)
+    if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
+    n_cell = inoderange(2,icell)-inoderange(1,icell)+1
+
+    com = cells_com(:,icell)
+    apri = apri_at_cells_com(icell)
 
     ! If the apr level based on the com is lower than the current level,
     ! we merge!
@@ -705,21 +743,30 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           P_eldest = eos_vars(igasP,eldest)
           P_tuther = eos_vars(igasP,tuther)
           gammai = gamma
-          ientropy = 0.5*pmassi*((P_eldest*rho_eldest**(-gammai)) + (P_tuther*rho_tuther**(-gammai)))
           ! check to see if this particle has already been merged and is on the list
+          ientropy_tuther = 0.
           already_stored = -1
-          do k = 1, entropy_count
+          !$omp atomic capture
+          entropy_count = entropy_count + 1
+          localtmp = entropy_count
+          !$omp end atomic
+          do k = 1, localtmp-1
              if (entropy_list(k) == iorig(eldest)) already_stored = k
              ! this is in case it's been merged before, it's about to be killed
              ! by setting it to -1, it shouldn't be identified in adjust_entropy routine
-             if (entropy_list(k) == iorig(tuther)) entropy_list(k) = -1
+             if (entropy_list(k) == iorig(tuther)) then
+                entropy_list(k) = -1
+                ientropy_tuther = entropy_stored(k)
+             end if
           enddo
+          ! use stored ientropy when possible (instead of recomputing) to ensure entropy conservation
+          if (ientropy_tuther == 0.) ientropy_tuther = ientropy_tuther + 0.5*pmassi*P_tuther*rho_tuther**(-gammai)
           if (already_stored < 0) then
-             entropy_count = entropy_count + 1
-             entropy_stored(entropy_count) = ientropy
-             entropy_list(entropy_count) = iorig(eldest)
+             entropy_stored(localtmp) = 0.5*pmassi*P_eldest*rho_eldest**(-gammai) + ientropy_tuther
+             entropy_list(localtmp) = iorig(eldest)
           else
-             entropy_stored(k) = ientropy
+             entropy_stored(already_stored) = entropy_stored(already_stored) + ientropy_tuther
+             entropy_list(localtmp) = -1    ! date already stored in 'already_stored', so mark new space as ignored
           endif
 
           ! discard tuther ("the other")
@@ -730,13 +777,17 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           if (ind_timesteps) call put_in_smallest_bin(eldest)
 
           ! book-keeping
+          localtmp = nrelax
           if (do_relax) then
+             !$omp atomic capture
              nrelax = nrelax + 1
-             relaxlist(nrelax) = eldest
+             localtmp = nrelax
+             !$omp end atomic
+             relaxlist(localtmp) = eldest
           endif
 
           ! If this particle was on the shuffle list previously, take it off
-          do n = 1,nrelax
+          do n = 1,localtmp
              if (relaxlist(n) == tuther) relaxlist(n) = 0
           enddo
 
@@ -844,6 +895,9 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
     endif
 
  enddo over_cells
+ !$omp end parallel do
+
+ deallocate(cells_com,apri_at_cells_com)
 
 end subroutine merge_with_special_tree
 

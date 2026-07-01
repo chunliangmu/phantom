@@ -41,7 +41,7 @@ module utils_apr
  real, allocatable :: apr_regions(:), apr_centre(:,:)
  real, save :: apr_H(2,100)  ! we enforce this to be 100
  real, allocatable :: entropy_stored(:)
- integer, allocatable :: entropy_list(:)
+ integer(kind=8), allocatable :: entropy_list(:)
  integer :: entropy_count
 
  logical :: apr_region_is_circle = .false.
