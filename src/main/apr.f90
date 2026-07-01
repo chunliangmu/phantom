@@ -543,8 +543,8 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  use utils_apr,     only:apr_centre
  use vectorutils, only:cross_product3D,matrixinvert3D
  use eos,           only:gamma
- integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew
- integer,         intent(inout) :: entropy_list(:),entropy_count
+ integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew,entropy_count
+ integer(kind=8), intent(inout) :: entropy_list(:)
  integer(kind=1), intent(inout) :: apr_level(:)
  integer,         intent(in)    :: current_apr,mergelist(:)
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
