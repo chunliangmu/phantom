@@ -543,8 +543,9 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
 
  allocate(cells_com(3,ncells),apri_at_cells_com(ncells))
 
+ spherical = .true.
  ! get the center of the cell
- !$omp parallel do default(none) &
+ !$omp parallel do default(none) schedule(dynamic) &
  !$omp shared(ncells,leaf_is_active,inoderange,inodeparts,spherical) &
  !$omp shared(xyzh_merge,apr_centre,icentre,cells_com) &
  !$omp private(icell,n_cell,com,m,i) &
@@ -594,13 +595,12 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  over_cells_part1: do icell=1,int(ncells)
     if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
     call get_apr(cells_com(1:3,icell),icentre,apri)
-    apri_at_cells_com(i) = apri
+    apri_at_cells_com(icell) = apri
  enddo over_cells_part1
 
  ! Now use the centre of mass of each cell to check whether it should
  ! be merged or not
- spherical = .true.
- !$omp parallel do default(none) &
+ !$omp parallel do default(none) schedule(dynamic) &
  !$omp shared(xyzh,vxyzu,iorig,ncells,leaf_is_active,inoderange,inodeparts,spherical) &
  !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist) &
  !$omp shared(apr_centre,current_apr,aprmassoftype,mergelist,eos_vars,gamma) &
