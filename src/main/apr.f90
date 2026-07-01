@@ -588,6 +588,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
     endif
     cells_com(:,icell) = com
  enddo over_cells_part0
+ !$omp end parallel do
  
  ! not sure how to parallelize this, so I am just gonna run it separately
  over_cells_part1: do icell=1,int(ncells)
