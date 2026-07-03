@@ -211,8 +211,8 @@ subroutine HII_Knn(nptmass,npart,xyzh,xyzmh_ptmass,vxyzu,eos_vars)
  use neighkdtree,   only:listneigh=>listneigh_global,getneigh_pos,leaf_is_active
  use sortutils,  only:Knnfunc,set_r2func_origin,r2func_origin
  use physcon,    only:pc,pi
- use dim,        only:maxvxyzu
- use io,         only:iverbose,iprint,warning,id,master
+ use dim,        only:maxvxyzu,use_apr
+ use io,         only:iverbose,iprint,warning,id,master,fatal
  integer, intent(in)    :: nptmass,npart
  real,    intent(in)    :: xyzh(:,:)
  real,    intent(inout) :: xyzmh_ptmass(:,:),vxyzu(:,:)
@@ -228,6 +228,7 @@ subroutine HII_Knn(nptmass,npart,xyzh,xyzmh_ptmass,vxyzu,eos_vars)
  r = 0.
  r_in = 0.
  pmass = massoftype(igas)
+ if (use_apr) call fatal('HII_Knn','H2 region code not yet compatible with APR.')
 
  !
  !-- Rst derivation and thermal feedback
@@ -355,8 +356,8 @@ end subroutine HII_Knn
 subroutine HII_ray(nptmass,npart,xyzh,xyzmh_ptmass,vxyzu,eos_vars)
  use part,     only:massoftype,igas,irateion,irstrom,isdead_or_accreted,&
                     iphase,get_partinfo,noverlap,rhoh,itemp,imu
- use dim,      only:maxvxyzu
- use io,         only:iverbose,iprint,id,master
+ use dim,      only:maxvxyzu,use_apr
+ use io,       only:iverbose,iprint,id,master,fatal
  integer, intent(in)    :: nptmass,npart
  real,    intent(in)    :: xyzh(:,:)
  real,    intent(inout) :: xyzmh_ptmass(:,:),vxyzu(:,:)
@@ -369,6 +370,7 @@ subroutine HII_ray(nptmass,npart,xyzh,xyzmh_ptmass,vxyzu,eos_vars)
 
  if (nHIIsources > 0 .and. id==master) then
     pmass = massoftype(igas)
+    if (use_apr) call fatal('HII_ray','H2 region code not yet compatible with APR.')
     xyzmh_ptmass(irstrom,:) = -1.
     k=0
     !
