@@ -259,11 +259,12 @@ end subroutine init_growth_coala
 subroutine get_growth_rate_coala(npart,xyzh,vxyzu,fxyzu,fext,&
                                  grainsize,dustfrac,dustevol,deltav,dt,eos_vars)
 #ifdef COALA
- use io,                   only:error
+ use io,                   only:error,fatal
  use physcon,              only:mH=>mass_proton_cgs
  use part,                 only:rhoh,massoftype,igas,isdead_or_accreted,ics,itemp,imu,tstop
  use eos,                  only:gmw
  use coala_interface_coag, only:coala_coag_k0,coala_coag
+ use dim,                  only:use_apr
 #endif
  integer, intent(in)    :: npart
  real,    intent(in)    :: xyzh(:,:),vxyzu(:,:),fxyzu(:,:),fext(:,:)
@@ -281,6 +282,8 @@ subroutine get_growth_rate_coala(npart,xyzh,vxyzu,fxyzu,fext,&
  real(wp) :: eps_rhodust,cs,mu_gas
  real(wp) :: rhoi,fxi,fyi,fzi,a_gas
  real(wp) :: mdust_old,mdust_new
+
+ if (use_apr) call fatal('get_growth_rate_coala','COALA solver code not yet compatible with APR.')
 
  ! Minimum value for rhodust in code units
  eps_rhodust = 1.e-30_wp

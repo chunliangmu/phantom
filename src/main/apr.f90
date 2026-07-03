@@ -543,8 +543,9 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
 
  allocate(cells_com(3,ncells),apri_at_cells_com(ncells))
 
+ spherical = .true.
  ! get the center of the cell
- !$omp parallel do default(none) &
+ !$omp parallel do default(none) schedule(dynamic) &
  !$omp shared(ncells,leaf_is_active,inoderange,inodeparts,spherical) &
  !$omp shared(xyzh_merge,apr_centre,icentre,cells_com) &
  !$omp private(icell,n_cell,com,m,i) &
@@ -594,25 +595,23 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  over_cells_part1: do icell=1,int(ncells)
     if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
     call get_apr(cells_com(1:3,icell),icentre,apri)
-    apri_at_cells_com(i) = apri
+    apri_at_cells_com(icell) = apri
  enddo over_cells_part1
 
  ! Now use the centre of mass of each cell to check whether it should
  ! be merged or not
- spherical = .true.
- !$omp parallel do default(none) &
+ !$omp parallel do default(none) schedule(dynamic) &
  !$omp shared(xyzh,vxyzu,iorig,ncells,leaf_is_active,inoderange,inodeparts,spherical) &
  !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist) &
  !$omp shared(apr_centre,current_apr,aprmassoftype,mergelist,eos_vars,gamma) &
  !$omp shared(apr_level,xyzh_merge,vxyzu_merge,entropy_count,entropy_list,entropy_stored) &
  !$omp private(icell,n_cell,i,m,u,v,w,vec_a,vec_b,vec_c,test_a,test_b,test_c,testp,testpp,ierr) &
- !$omp private(pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
+ !$omp private(com,pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
  !$omp private(apri,pmassi,ogen,ogam,Q,pdash,qdash,det,phi,lamb,es,un,iner,inv_iner,omega) &
  !$omp private(r_part,sum_temp,s_min,S,gammai,parent_list,already_stored,localtmp,term) &
  !$omp private(A,B,C,discriminant,alpha,alpha1,alpha2) &
  !$omp private(eldest,rho_eldest,P_eldest) &
  !$omp private(tuther,rho_tuther,P_tuther,ientropy_tuther) &
- !$omp firstprivate(com) &
  !$omp reduction(+:nkilled)
  over_cells: do icell=1,int(ncells)
     if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
@@ -767,10 +766,12 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
              entropy_list(localtmp) = iorig(eldest)
           else
              entropy_stored(already_stored) = entropy_stored(already_stored) + ientropy_tuther
-             entropy_list(localtmp) = -1    ! date already stored in 'already_stored', so mark new space as ignored
+             entropy_list(localtmp) = -1    ! data already stored in 'already_stored', so mark new space as ignored
           endif
 
           ! discard tuther ("the other")
+          ! Note: combine_two_particles calls kill_particle, which is not thread safe
+          ! Remedied by adding omp critical keyword to kill_particle subroutine
           call combine_two_particles(eldest,tuther)
           parent_list(m) = eldest
           apr_level(eldest) = apr_level(eldest) - int(1,kind=1)

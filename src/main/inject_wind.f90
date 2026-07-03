@@ -244,6 +244,7 @@ subroutine init_resolution(params,rsonic,neighbour_distance)
  use physcon,      only:pi
  use injectutils,  only:get_neighb_distance
  use io,           only:fatal
+ use dim,          only:use_apr
  use wind,         only:wind_params
 
  real,              intent(in)  :: rsonic
@@ -253,6 +254,8 @@ subroutine init_resolution(params,rsonic,neighbour_distance)
  integer :: nzones_per_sonic_point
  real    :: mV_on_MdotR,dr,dist_to_sonic_point,mass_of_particles,rho_ini,rinject
  real    :: shell_spacing
+
+ if (use_apr) call fatal('init_resolution','inject_wind not yet compatible with APR.')
 
  rinject = params%rinject/udist
  if (iwind_resolution == 0) then
