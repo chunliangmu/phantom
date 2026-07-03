@@ -767,7 +767,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
              entropy_list(localtmp) = iorig(eldest)
           else
              entropy_stored(already_stored) = entropy_stored(already_stored) + ientropy_tuther
-             entropy_list(localtmp) = -1    ! date already stored in 'already_stored', so mark new space as ignored
+             entropy_list(localtmp) = -1    ! data already stored in 'already_stored', so mark new space as ignored
           endif
 
           ! discard tuther ("the other")
