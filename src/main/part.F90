@@ -955,13 +955,14 @@ subroutine kill_particle(i,npoftype)
  !
  ! do not kill particles that are already dead
  ! because this causes endless loop in shuffle_part
+ !$omp critical
  if (.not.isdeadh(xyzh(4,i))) then
     xyzh(4,i) = 0.
     if (present(npoftype)) call remove_particle_from_npartoftype(i,npoftype)
     ll(i) = ideadhead
     ideadhead = i
  endif
-
+ !$omp end critical
 end subroutine kill_particle
 
 !----------------------------------------------------------------

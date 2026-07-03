@@ -606,13 +606,12 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  !$omp shared(apr_centre,current_apr,aprmassoftype,mergelist,eos_vars,gamma) &
  !$omp shared(apr_level,xyzh_merge,vxyzu_merge,entropy_count,entropy_list,entropy_stored) &
  !$omp private(icell,n_cell,i,m,u,v,w,vec_a,vec_b,vec_c,test_a,test_b,test_c,testp,testpp,ierr) &
- !$omp private(pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
+ !$omp private(com,pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
  !$omp private(apri,pmassi,ogen,ogam,Q,pdash,qdash,det,phi,lamb,es,un,iner,inv_iner,omega) &
  !$omp private(r_part,sum_temp,s_min,S,gammai,parent_list,already_stored,localtmp,term) &
  !$omp private(A,B,C,discriminant,alpha,alpha1,alpha2) &
  !$omp private(eldest,rho_eldest,P_eldest) &
  !$omp private(tuther,rho_tuther,P_tuther,ientropy_tuther) &
- !$omp firstprivate(com) &
  !$omp reduction(+:nkilled)
  over_cells: do icell=1,int(ncells)
     if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
@@ -771,6 +770,8 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           endif
 
           ! discard tuther ("the other")
+          ! Note: combine_two_particles calls kill_particle, which is not thread safe
+          ! Remedied by adding omp critical keyword to kill_particle subroutine
           call combine_two_particles(eldest,tuther)
           parent_list(m) = eldest
           apr_level(eldest) = apr_level(eldest) - int(1,kind=1)
