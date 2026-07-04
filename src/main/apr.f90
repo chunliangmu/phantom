@@ -325,6 +325,10 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
        do ii = 1,idx_len
           mm = idx_split(ii) ! original particle that should be split
           kk = npartold + ii ! location in array for new particle
+          pmassi = aprmassoftype(igas,apr_level(mm))
+          P_i = eos_vars(igasP,mm)
+          rhoi = rhoh(xyzh(4,mm),pmassi)
+          ientropy = pmassi*(P_i*rhoi**(-gamma))
           if (adjusted_split) then
              call splitpart(mm,kk,rneigh=rneighs(ii))
           else
@@ -334,13 +338,9 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
              relaxlist(nrelax + ii) = mm
              relaxlist(nrelax + n_to_split + ii) = kk
           endif
-          pmassi = aprmassoftype(igas,apr_level(ii))
-          P_i = eos_vars(igasP,ii)
-          rhoi = rhoh(xyzh(4,ii),pmassi)
-          ientropy = pmassi*(P_i*rhoi**(-gamma))
           entropy_count = entropy_count + 2
           entropy_stored(entropy_count - 1:entropy_count) = 0.5*ientropy ! because we share it across both evenly
-          entropy_list(entropy_count - 1) = iorig(ii)
+          entropy_list(entropy_count - 1) = iorig(mm)
           entropy_list(entropy_count) = iorig(kk)
        enddo
 
