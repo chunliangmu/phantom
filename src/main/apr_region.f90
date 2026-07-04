@@ -128,10 +128,8 @@ subroutine set_apr_regions(ref_dir,apr_max,apr_regions,apr_rad,apr_drad)
     enddo
  else
     apr_regions(apr_max) = huge(apr_regions(apr_max)) ! again this just needs to encompass the whole domain
-    ! [clmu] changing code below as an ad hoc fix for apr particle regions
-    apr_regions(1) = apr_rad
-    do ii = 2,apr_max-1
-       apr_regions(ii) = apr_regions(ii-1) + apr_drad + (apr_max - ii)
+    do ii = 1,apr_max-1
+       apr_regions(ii) = apr_rad + (ii-1)*apr_drad
     enddo
  endif
 
