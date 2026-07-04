@@ -296,9 +296,9 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
  integer, allocatable :: iorder(:)
  real :: massri, mtot
  ! arbitrarily define the prescribed mfrac location ()
- real, parameter :: prescribed_mfrac(10) = [ 0.477, 0.614, 0.732, &
-                                           & 0.829, 0.897, 0.942, & 
-                                           & 0.971, 0.987, 0.995, 1.0]
+ real, parameter :: prescribed_mfrac(10) = [ 0.5036, 0.6329, 0.7434, &
+                                           & 0.8323, 0.8960, 0.9409, & 
+                                           & 0.9699, 0.9868, 0.9964, 1.0]
  real, dimension(10) :: prescribed_mcoord
    
 
