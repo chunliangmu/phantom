@@ -29,7 +29,7 @@ module apr
 
  private
  real    :: sep_factor = 0.2
- logical :: apr_verbose = .true.
+ logical :: apr_verbose = .false.
  logical :: do_relax = .false.
  logical :: adjusted_split = .true.
 
