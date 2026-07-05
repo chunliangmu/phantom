@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -47,7 +47,7 @@ subroutine set_apr_centre(apr_type,apr_centre,ntrack,track_part)
  use centreofmass, only:get_centreofmass
  integer, intent(in)  :: apr_type
  real,    intent(out) :: apr_centre(3,ntrack_max)
- integer, optional, intent(in) :: ntrack,track_part(:)
+ integer, intent(in), optional :: ntrack,track_part(:)
  real :: xcom(3), vcom(3)
  integer :: ii, ntrack_temp, track_part_temp(ntrack_max)
  integer, save :: count = 0
@@ -115,9 +115,9 @@ end subroutine set_apr_centre
 !+
 !-----------------------------------------------------------------------
 subroutine set_apr_regions(ref_dir,apr_max,apr_regions,apr_rad,apr_drad)
- integer, intent(in) :: ref_dir,apr_max
- real, intent(in)    :: apr_rad,apr_drad
- real, intent(inout) :: apr_regions(apr_max)
+ integer, intent(in)    :: ref_dir,apr_max
+ real,    intent(in)    :: apr_rad,apr_drad
+ real,    intent(inout) :: apr_regions(apr_max)
  integer :: ii,kk
 
  if (ref_dir == 1) then
@@ -128,10 +128,8 @@ subroutine set_apr_regions(ref_dir,apr_max,apr_regions,apr_rad,apr_drad)
     enddo
  else
     apr_regions(apr_max) = huge(apr_regions(apr_max)) ! again this just needs to encompass the whole domain
-    ! [clmu] changing code below as an ad hoc fix for apr particle regions
-    apr_regions(1) = apr_rad
-    do ii = 2,apr_max-1
-       apr_regions(ii) = apr_regions(ii-1) + apr_drad + (apr_max - ii)
+    do ii = 1,apr_max-1
+       apr_regions(ii) = apr_rad + (ii-1)*apr_drad
     enddo
  endif
 
@@ -152,11 +150,11 @@ subroutine identify_clumps(npart,xyzh,vxyzu,poten,apr_level,xyzmh_ptmass,aprmass
  use part,      only:igas,rhoh,isdead_or_accreted
  use ptmass,    only:rho_crit_cgs
  use units,     only:unit_density
- integer, intent(in) :: npart
- integer(kind=1), intent(in) :: apr_level(:)
- real, intent(in) :: xyzh(:,:), vxyzu(:,:), aprmassoftype(:,:),xyzmh_ptmass(:,:)
- real(kind=4), intent(in) :: poten(:)
- integer, intent(out) :: ntrack_temp, track_part_temp(:)
+ integer,         intent(in)  :: npart
+ integer(kind=1), intent(in)  :: apr_level(:)
+ real,            intent(in)  :: xyzh(:,:), vxyzu(:,:), aprmassoftype(:,:),xyzmh_ptmass(:,:)
+ real(kind=4),    intent(in)  :: poten(:)
+ integer,         intent(out) :: ntrack_temp, track_part_temp(:)
  integer :: ii, kk
  real :: pmassi, rhoi, r2test, rminlimit2, rin, rout
 
@@ -221,11 +219,11 @@ subroutine create_or_update_apr_clump(npart,xyzh,vxyzu,poten,apr_level,xyzmh_ptm
  use utils_apr, only:find_closest_region
  use part,      only:igas,rhoh
  use io,        only:fatal
- integer, intent(in) :: npart
+ integer,         intent(in) :: npart
  integer(kind=1), intent(in) :: apr_level(:)
- real, intent(in) :: xyzh(:,:), vxyzu(:,:), aprmassoftype(:,:),xyzmh_ptmass(:,:)
- real(kind=4), intent(in) :: poten(:)
- integer, intent(in) :: ntrack_temp, track_part_temp(:)
+ real,            intent(in) :: xyzh(:,:), vxyzu(:,:), aprmassoftype(:,:),xyzmh_ptmass(:,:)
+ real(kind=4),    intent(in) :: poten(:)
+ integer,         intent(in) :: ntrack_temp, track_part_temp(:)
  integer :: ii, ll, jj, kk
  real :: pmassi, rhoitest, rhoiexisting, rtest, xi(3)
 
@@ -237,7 +235,7 @@ subroutine create_or_update_apr_clump(npart,xyzh,vxyzu,poten,apr_level,xyzmh_ptm
     rhoitest = rhoh(xyzh(4,ii),pmassi)
 
     ! check if its inside an existing region
-    call find_closest_region(xyzh(1:3,ii),ll)
+    call find_closest_region(xyzh(1:3,ii),ntrack,apr_centre,ll)
     if (ll > 0) then
        xi = xyzh(1:3,ii) - apr_centre(1:3,ll)
        kk = track_part(ll) ! this is the particle at the centre of the closest region
@@ -296,9 +294,9 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
  integer, allocatable :: iorder(:)
  real :: massri, mtot
  ! arbitrarily define the prescribed mfrac location ()
- real, parameter :: prescribed_mfrac(10) = [ 0.477, 0.614, 0.732, &
-                                           & 0.829, 0.897, 0.942, & 
-                                           & 0.971, 0.987, 0.995, 1.0]
+ real, parameter :: prescribed_mfrac(10) = [ 0.5036, 0.6329, 0.7434, &
+                                           & 0.8323, 0.8960, 0.9409, & 
+                                           & 0.9699, 0.9868, 0.9964, 1.0]
  real, dimension(10) :: prescribed_mcoord
    
 

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -41,7 +41,7 @@ module utils_apr
  real, allocatable :: apr_regions(:), apr_centre(:,:)
  real, save :: apr_H(2,100)  ! we enforce this to be 100
  real, allocatable :: entropy_stored(:)
- integer, allocatable :: entropy_list(:)
+ integer(kind=8), allocatable :: entropy_list(:)
  integer :: entropy_count
 
  logical :: apr_region_is_circle = .false.
@@ -56,9 +56,9 @@ contains
 !-----------------------------------------------------------------------
 subroutine find_inner_and_outer_radius(npart,xyzh,rmin,rmax)
  use part, only:xyzmh_ptmass, isdead_or_accreted
- integer, intent(in) :: npart
- real, intent(in)    :: xyzh(:,:)
- real, intent(out)   :: rmin,rmax
+ integer, intent(in)  :: npart
+ real,    intent(in)  :: xyzh(:,:)
+ real,    intent(out) :: rmin,rmax
  integer :: ii
  real    :: rmin_test, rmax_test, xi, yi, zi, r2_test
 
@@ -91,9 +91,9 @@ end subroutine find_inner_and_outer_radius
 !  routine to find the closest apr centre to a position
 !+
 !-----------------------------------------------------------------------
-
-subroutine find_closest_region(pos,iclosest)
- real, intent(in) :: pos(3)
+subroutine find_closest_region(pos,ntrack,apr_centre,iclosest)
+ real,    intent(in)  :: pos(3),apr_centre(:,:)
+ integer, intent(in)  :: ntrack
  integer, intent(out) :: iclosest
  real :: r2,rtest,dx,dy,dz
  integer :: ii
@@ -268,7 +268,13 @@ subroutine adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
  integer :: i,ii
  real    :: pmassi,rhoi
 
-
+!$omp parallel default(none) &
+!$omp shared(entropy_count,entropy_list,entropy_stored) &
+!$omp shared(aprmassoftype,apr_level) &
+!$omp shared(iorig,xyzh,gamma) &
+!$omp shared(eos_vars,vxyzu) &
+!$omp private(i,ii,pmassi,rhoi)
+!$omp do
  do i = 1, entropy_count
     if (entropy_list(i) < 0) cycle
     ii = findloc(iorig,entropy_list(i),dim=1) ! this is the actual particle number
@@ -279,7 +285,8 @@ subroutine adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
     vxyzu(4,ii) = eos_vars(igasP,ii)/((gamma - 1.) * rhoi)            ! reset internal energy
     eos_vars(ics,ii) = sqrt(gamma*eos_vars(igasP,ii)/rhoi)           ! and reset sound speed
  enddo
-
+!$omp enddo
+!$omp end parallel
 
 end subroutine adjust_entropy
 

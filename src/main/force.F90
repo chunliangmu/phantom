@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -60,7 +60,7 @@ module forces
  public :: force, reconstruct_dv, get_drag_terms ! latter to avoid compiler warning
 
  !--indexing for xpartveci array
- integer, parameter ::       &
+ integer, parameter :: &
        ixi             = 1,  &
        iyi             = 2,  &
        izi             = 3,  &
@@ -139,7 +139,7 @@ module forces
        imetricend      = imetricstart + 31
 
  !--indexing for fsum array
- integer, parameter ::   &
+ integer, parameter :: &
        ifxi           = 1,  &
        ifyi           = 2,  &
        ifzi           = 3,  &
@@ -161,22 +161,25 @@ module forces
        ifdragxi       = 18, &
        ifdragyi       = 19, &
        ifdragzi       = 20, &
-       iddustevoli    = 21, &
-       iddustevoliend = 21 +   (maxdustsmall-1), &
-       idudtdusti     = 22 +   (maxdustsmall-1), &
-       idudtdustiend  = 22 + 2*(maxdustsmall-1), &
-       ideltavxi      = 23 + 2*(maxdustsmall-1), &
-       ideltavxiend   = 23 + 3*(maxdustsmall-1), &
-       ideltavyi      = 24 + 3*(maxdustsmall-1), &
-       ideltavyiend   = 24 + 4*(maxdustsmall-1), &
-       ideltavzi      = 25 + 4*(maxdustsmall-1), &
-       ideltavziend   = 25 + 5*(maxdustsmall-1), &
-       idvix          = 26 + 5*(maxdustsmall-1), &
-       idviy          = 27 + 5*(maxdustsmall-1), &
-       idviz          = 28 + 5*(maxdustsmall-1), &
-       idensgasi      = 29 + 5*(maxdustsmall-1), &
-       icsi           = 30 + 5*(maxdustsmall-1), &
-       idradi         = 31 + 5*(maxdustsmall-1)
+       ivreldispxi    = 21, &
+       ivreldispyi    = 22, &
+       ivreldispzi    = 23, &
+       iddustevoli    = 24, &
+       iddustevoliend = 24 +   (maxdustsmall-1), &
+       idudtdusti     = 25 +   (maxdustsmall-1), &
+       idudtdustiend  = 25 + 2*(maxdustsmall-1), &
+       ideltavxi      = 26 + 2*(maxdustsmall-1), &
+       ideltavxiend   = 26 + 3*(maxdustsmall-1), &
+       ideltavyi      = 27 + 3*(maxdustsmall-1), &
+       ideltavyiend   = 27 + 4*(maxdustsmall-1), &
+       ideltavzi      = 28 + 4*(maxdustsmall-1), &
+       ideltavziend   = 28 + 5*(maxdustsmall-1), &
+       idvix          = 29 + 5*(maxdustsmall-1), &
+       idviy          = 30 + 5*(maxdustsmall-1), &
+       idviz          = 31 + 5*(maxdustsmall-1), &
+       idensgasi      = 32 + 5*(maxdustsmall-1), &
+       icsi           = 33 + 5*(maxdustsmall-1), &
+       idradi         = 34 + 5*(maxdustsmall-1)
 
  private
 
@@ -188,7 +191,8 @@ contains
 !+
 !----------------------------------------------------------------
 subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
-                 rad,drad,radprop,dustprop,dustgasprop,dustfrac,ddustevol,fext,fxyz_drag,&
+                 rad,drad,radprop,dustprop,dustgasprop,Vrel_disp,&
+                 dustfrac,ddustevol,fext,fxyz_drag,&
                  ipart_rhomax,dt,stressmax,eos_vars,dens,metrics,apr_level)
 
  use dim,          only:maxvxyzu,mhd,mhd_nonideal,mpi,use_dust,use_apr,use_sinktree
@@ -235,28 +239,28 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  use omputils,     only:omp_thread_num,omp_num_threads
  use eos,          only:iresistive_heating
 
- integer,      intent(in)    :: icall,npart
- integer(kind=1), intent(in) :: apr_level(:)
- real,         intent(in)    :: xyzh(:,:)
- real,         intent(inout) :: vxyzu(:,:)
- real,         intent(in)    :: dustfrac(:,:)
- real,         intent(in)    :: dustprop(:,:)
- real,         intent(inout) :: dustgasprop(:,:)
- real,         intent(in)    :: fext(:,:)
- real,         intent(inout) :: fxyz_drag(:,:)
- real,         intent(in)    :: eos_vars(:,:)
- real,         intent(out)   :: fxyzu(:,:),ddustevol(:,:)
- real,         intent(in)    :: Bevol(:,:)
- real,         intent(out)   :: dBevol(:,:)
- real(kind=4), intent(inout) :: divcurlv(:,:)
- real(kind=4), intent(in)    :: divcurlB(:,:)
- real,         intent(in)    :: dt,stressmax
- integer,      intent(out)   :: ipart_rhomax ! test this particle for point mass creation
- real,         intent(in)    :: rad(:,:)
- real,         intent(out)   :: drad(:,:)
- real,         intent(inout) :: radprop(:,:)
- real,         intent(in)    :: dens(:), metrics(:,:,:,:)
-
+ integer,         intent(in)    :: icall,npart
+ integer(kind=1), intent(in)    :: apr_level(:)
+ real,            intent(in)    :: xyzh(:,:)
+ real,            intent(inout) :: vxyzu(:,:)
+ real,            intent(in)    :: dustfrac(:,:)
+ real,            intent(in)    :: dustprop(:,:)
+ real,            intent(inout) :: dustgasprop(:,:)
+ real,            intent(out)   :: Vrel_disp(:)
+ real,            intent(in)    :: fext(:,:)
+ real,            intent(inout) :: fxyz_drag(:,:)
+ real,            intent(in)    :: eos_vars(:,:)
+ real,            intent(out)   :: fxyzu(:,:),ddustevol(:,:)
+ real,            intent(in)    :: Bevol(:,:)
+ real,            intent(out)   :: dBevol(:,:)
+ real(kind=4),    intent(inout) :: divcurlv(:,:)
+ real(kind=4),    intent(in)    :: divcurlB(:,:)
+ real,            intent(in)    :: dt,stressmax
+ integer,         intent(out)   :: ipart_rhomax ! test this particle for point mass creation
+ real,            intent(in)    :: rad(:,:)
+ real,            intent(out)   :: drad(:,:)
+ real,            intent(inout) :: radprop(:,:)
+ real,            intent(in)    :: dens(:), metrics(:,:,:,:)
  real, save :: xyzcache(4,maxcellcache)
 !$omp threadprivate(xyzcache)
  integer :: i,icell,nneigh
@@ -413,6 +417,7 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 !$omp shared(dragreg) &
 !$omp shared(filfac) &
 !$omp shared(dustgasprop) &
+!$omp shared(Vrel_disp) &
 !$omp shared(fxyz_drag) &
 !$omp shared(fxyz_dragold) &
 !$omp shared(fext) &
@@ -544,7 +549,7 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
        call write_cell(stack_waiting,cell)
     else
        call finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dvdx,&
-                             divBsymm,divcurlv,dBevol,ddustevol,deltav,dustgasprop,fxyz_drag,fext,dragreg,&
+                             divBsymm,divcurlv,dBevol,ddustevol,deltav,dustgasprop,Vrel_disp,fxyz_drag,fext,dragreg,&
                              filfac,dtcourant,dtforce,dtvisc,dtohm,dthall,dtambi,dtdiff,dtmini,dtmaxi, &
 #ifdef IND_TIMESTEPS
                              nbinmaxnew,ncheckbin, &
@@ -635,7 +640,8 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
        cell = get_cell(stack_waiting,i)
 
        call finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dvdx, &
-                                          divBsymm,divcurlv,dBevol,ddustevol,deltav,dustgasprop,fxyz_drag,fext,dragreg, &
+                                          divBsymm,divcurlv,dBevol,ddustevol,deltav,dustgasprop,Vrel_disp, &
+                                          fxyz_drag,fext,dragreg, &
                                           filfac,dtcourant,dtforce,dtvisc,dtohm,dthall,dtambi,dtdiff,dtmini,dtmaxi, &
 #ifdef IND_TIMESTEPS
                                           nbinmaxnew,ncheckbin, &
@@ -1005,12 +1011,10 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
  real    :: fmi,fmj,dsofti,dsoftj,hsoft1,hsoft21,q2softi
 #endif
  real    :: phi,phii,phij,fgrav,fgravi,fgravj,termi
-#ifdef KROME
- real    :: gammaj
-#endif
  integer :: iregime,idusttype,l
  real    :: dragterm,dragheating,wdrag,dv2,tsijtmp
  real    :: grkernav,tsj(maxdusttypes),dustfracterms(maxdusttypes),term
+ real    :: projvdust
  real    :: projvstar,projf_drag,epstsj,sdrag1,sdrag2!,rhogas1i
  real    :: winter
  real    :: dBevolx,dBevoly,dBevolz,divBsymmterm,divBdiffterm
@@ -1044,7 +1048,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
  real    :: dlorentzv,lorentzj,lorentzi_star,lorentzj_star,projbigvi,projbigvj
  real    :: bigvj(1:3),velj(3),metricj(0:3,0:3,2),projbigvstari,projbigvstarj
  real    :: radPj,fgravxi,fgravyi,fgravzi
- real    :: gradpx,gradpy,gradpz,gradP_cooli,gradP_coolj
+ real    :: gradpx,gradpy,gradpz,gradP_cooli=0d0,gradP_coolj=0d0
 
  ! unpack
  xi            = xpartveci(ixi)
@@ -1351,7 +1355,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
              dti = min(dti,get_dt(dt,ibin_old(j)))
           endif
        endif
-#endif IND_TIMESTEPS
+#endif
 
        if (use_apr) then
           pmassj = aprmassoftype(iamtypej,apr_level(j))
@@ -1378,7 +1382,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
           enj = vxyzu(4,j)
           if (eos_is_non_ideal(ieos)) then  ! only do this if eos requires temperature in physical units
              tempj = eos_vars(itemp,j)
-             denij = 0.5*(eni/tempi + enj/tempj)*(tempi - tempj)  ! dU = c_V * dT
+             denij = 0.5*(eni/max(tempi,1.) + enj/max(tempj,1.))*(tempi - tempj)  !dU = c_V * dT, but with a floor to avoid issues with very low temperatures
           else
              denij = eni - enj
           endif
@@ -1708,6 +1712,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
           fsum(ifyi) = fsum(ifyi) - runiy*(gradp + fgrav) - projsy
           fsum(ifzi) = fsum(ifzi) - runiz*(gradp + fgrav) - projsz
           fsum(ipot) = fsum(ipot) + pmassj*phii ! no need to symmetrise (see PM07)
+
           if (icooling == 9) then
              gradpx = gradpx + runix*(gradP_cooli + gradP_coolj)
              gradpy = gradpy + runiy*(gradP_cooli + gradP_coolj)
@@ -1822,6 +1827,24 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
                    fsum(ideltavxi+(l-1)) = fsum(ideltavxi+(l-1)) + term*runix
                    fsum(ideltavyi+(l-1)) = fsum(ideltavyi+(l-1)) + term*runiy
                    fsum(ideltavzi+(l-1)) = fsum(ideltavzi+(l-1)) + term*runiz
+                   if (use_dustgrowth) then  ! get dust-dust velocities when dust as a mixture
+                      ! true answer: v_d = v + (1-dustfracjsum)*deltav
+                      ! here we assume barycentric velocity representative as dust velocity,
+                      ! should be ok in terminal velocity approx.
+
+                      projvdust = projv ! (vdustxj-vdustxi)*runix + (vdustyj-vdustyi)*runiy + (vdustzj-vdustzi)*runiz
+                      call reconstruct_dv(projvdust,dx,dy,dz,runix,runiy,runiz,dvdxi,dvdxj,projvstar,0)  ! get dvdx for dust ? we can use the barycentric one assuming dust is coupled ?
+                      if (q2i < q2j) then  ! use the drag kernel
+                         wdrag = wkern_drag(q2i,qi)*hi21*hi1*cnormk_drag
+                      else
+                         wdrag = wkern_drag(q2j,qj)*hj21*hj1*cnormk_drag
+                      endif
+                      if (projvstar<0) then  ! projvstar < 0 = particles are crossing
+                         fsum(ivreldispxi) = fsum(ivreldispxi) + 3.*pmassj*projvstar*runix*wdrag/(rhoi*dustfraci(l))
+                         fsum(ivreldispyi) = fsum(ivreldispyi) + 3.*pmassj*projvstar*runiy*wdrag/(rhoi*dustfraci(l))
+                         fsum(ivreldispzi) = fsum(ivreldispzi) + 3.*pmassj*projvstar*runiz*wdrag/(rhoi*dustfraci(l))
+                      endif
+                   endif
                 endif
              enddo
           endif
@@ -1945,6 +1968,24 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
                 fsum(ifdragzi) = fsum(ifdragzi) - dragterm*runiz
              endif
           endif
+          ! dust-dust velocities when dust as particles
+          if (use_dustgrowth) then
+             if (iamdusti .and. iamdustj) then ! dust-dust velocities
+                if (q2i < q2j) then
+                   wdrag = wkern_drag(q2i,qi)*hi21*hi1*cnormk_drag
+                else
+                   wdrag = wkern_drag(q2j,qj)*hj21*hj1*cnormk_drag
+                endif
+                if (use_dustgrowth) then
+                   call reconstruct_dv(projv,dx,dy,dz,runix,runiy,runiz,dvdxi,dvdxj,projvstar,0) ! get projvstar, no slope limiter needed as we just need the relative velocity
+                   if (projvstar<0) then  ! projvstar > 0 = particles are not crossing
+                      fsum(ivreldispxi) = fsum(ivreldispxi) + 3.*pmassj*projvstar*runix*wdrag/rhoi
+                      fsum(ivreldispyi) = fsum(ivreldispyi) + 3.*pmassj*projvstar*runiy*wdrag/rhoi
+                      fsum(ivreldispzi) = fsum(ivreldispzi) + 3.*pmassj*projvstar*runiz*wdrag/rhoi
+                   endif
+                endif
+             endif
+          endif
        endif ifgas
 
 #ifdef GRAVITY
@@ -2035,15 +2076,15 @@ subroutine get_stress(pri,spsoundi,rhoi,rho1i,xi,yi,zi, &
  use part,            only:mhd,strain_from_dvdx
  use viscosity,       only:shearfunc
 
- real,    intent(in)    :: pri,spsoundi,rhoi,rho1i,xi,yi,zi,pmassi
- real,    intent(in)    :: Bxi,Byi,Bzi
- real,    intent(out)   :: pro2i,vwavei
- real,    intent(out)   :: sxxi,sxyi,sxzi,syyi,syzi,szzi
- real,    intent(out)   :: visctermiso,visctermaniso
- logical, intent(in)    :: realviscosity
- real,    intent(in)    :: divvi,bulkvisc,stressmax
- real,    intent(in)    :: dvdx(9)
- real,    intent(in)    :: radPi
+ real,    intent(in)  :: pri,spsoundi,rhoi,rho1i,xi,yi,zi,pmassi
+ real,    intent(in)  :: Bxi,Byi,Bzi
+ real,    intent(out) :: pro2i,vwavei
+ real,    intent(out) :: sxxi,sxyi,sxzi,syyi,syzi,szzi
+ real,    intent(out) :: visctermiso,visctermaniso
+ logical, intent(in)  :: realviscosity
+ real,    intent(in)  :: divvi,bulkvisc,stressmax
+ real,    intent(in)  :: dvdx(9)
+ real,    intent(in)  :: radPi
 
  real :: Bro2i,Brhoxi,Brhoyi,Brhozi
  real :: stressiso,term,graddivvcoeff,del2vcoeff,strain(6)
@@ -2148,28 +2189,28 @@ subroutine start_cell(cell,iphase,xyzh,vxyzu,gradh,divcurlv,divcurlB,dvdx,Bevol,
  use timestep_ind,    only:get_dt
  use nicil,           only:nimhd_get_jcbcb
  use radiation_utils, only:get_rad_R
- type(cellforce),    intent(inout) :: cell
- integer(kind=1),    intent(in)    :: iphase(:)
- real,               intent(in)    :: xyzh(:,:)
- real,               intent(inout) :: vxyzu(:,:)
- real(kind=4),       intent(in)    :: gradh(:,:)
- real(kind=4),       intent(in)    :: divcurlv(:,:)
- real(kind=4),       intent(in)    :: divcurlB(:,:)
- real(kind=4),       intent(in)    :: dvdx(:,:)
- real,               intent(in)    :: Bevol(:,:)
- real,               intent(in)    :: dustfrac(:,:)
- real,               intent(in)    :: dustprop(:,:)
- real,               intent(in)    :: fxyz_drag(:,:)
- real,               intent(in)    :: eta_nimhd(:,:)
- real(kind=4),       intent(in)    :: alphaind(:,:)
- real,               intent(in)    :: stressmax
- real,               intent(in)    :: rad(:,:)
- real,               intent(inout) :: radprop(:,:)
- real,               intent(in)    :: dens(:)
- real,               intent(in)    :: metrics(:,:,:,:)
- real,               intent(in)    :: eos_vars(:,:)
- real,               intent(in)    :: dt
- integer(kind=1),    intent(in)    :: apr_level(:)
+ type(cellforce), intent(inout) :: cell
+ integer(kind=1), intent(in)    :: iphase(:)
+ real,            intent(in)    :: xyzh(:,:)
+ real,            intent(inout) :: vxyzu(:,:)
+ real(kind=4),    intent(in)    :: gradh(:,:)
+ real(kind=4),    intent(in)    :: divcurlv(:,:)
+ real(kind=4),    intent(in)    :: divcurlB(:,:)
+ real(kind=4),    intent(in)    :: dvdx(:,:)
+ real,            intent(in)    :: Bevol(:,:)
+ real,            intent(in)    :: dustfrac(:,:)
+ real,            intent(in)    :: dustprop(:,:)
+ real,            intent(in)    :: fxyz_drag(:,:)
+ real,            intent(in)    :: eta_nimhd(:,:)
+ real(kind=4),    intent(in)    :: alphaind(:,:)
+ real,            intent(in)    :: stressmax
+ real,            intent(in)    :: rad(:,:)
+ real,            intent(inout) :: radprop(:,:)
+ real,            intent(in)    :: dens(:)
+ real,            intent(in)    :: metrics(:,:,:,:)
+ real,            intent(in)    :: eos_vars(:,:)
+ real,            intent(in)    :: dt
+ integer(kind=1), intent(in)    :: apr_level(:)
  real         :: radRi
  real         :: radPi
 
@@ -2484,33 +2525,33 @@ subroutine compute_cell(cell,listneigh,nneigh,Bevol,xyzh,vxyzu,fxyzu, &
  use eos,             only:iresistive_heating
  use shock_capturing, only:beta,alphau,alphaB
 
- type(cellforce), intent(inout)  :: cell
+ type(cellforce), intent(inout) :: cell
 
- integer,         intent(in)     :: listneigh(:)
- integer,         intent(in)     :: nneigh
- real,            intent(in)     :: Bevol(:,:)
- real,            intent(in)     :: xyzh(:,:)
- real,            intent(inout)  :: vxyzu(:,:)
- real,            intent(in)     :: fxyzu(:,:)
- integer(kind=1), intent(in)     :: iphase(:)
- real(kind=4),    intent(in)     :: divcurlv(:,:)
- real(kind=4),    intent(in)     :: divcurlB(:,:)
- real(kind=4),    intent(in)     :: alphaind(:,:)
- real,            intent(in)     :: eta_nimhd(:,:)
- real,            intent(in)     :: dustfrac(:,:)
- real,            intent(in)     :: dustprop(:,:)
- real,            intent(in)     :: fxyz_drag(:,:)
- real,            intent(in)     :: eos_vars(:,:)
- real(kind=4),    intent(in)     :: gradh(:,:)
- integer(kind=1), intent(inout)  :: ibin_wake(:)
- integer(kind=1), intent(in)     :: ibinnow_m1
- real,            intent(in)     :: stressmax
- real,            intent(in)     :: xyzcache(:,:)
- real,            intent(in)     :: rad(:,:)
- real,            intent(inout)  :: radprop(:,:)
- real,            intent(in)     :: dens(:),metrics(:,:,:,:)
- real,            intent(in)     :: dt
- integer(kind=1), intent(in)     :: apr_level(:)
+ integer,         intent(in)    :: listneigh(:)
+ integer,         intent(in)    :: nneigh
+ real,            intent(in)    :: Bevol(:,:)
+ real,            intent(in)    :: xyzh(:,:)
+ real,            intent(inout) :: vxyzu(:,:)
+ real,            intent(in)    :: fxyzu(:,:)
+ integer(kind=1), intent(in)    :: iphase(:)
+ real(kind=4),    intent(in)    :: divcurlv(:,:)
+ real(kind=4),    intent(in)    :: divcurlB(:,:)
+ real(kind=4),    intent(in)    :: alphaind(:,:)
+ real,            intent(in)    :: eta_nimhd(:,:)
+ real,            intent(in)    :: dustfrac(:,:)
+ real,            intent(in)    :: dustprop(:,:)
+ real,            intent(in)    :: fxyz_drag(:,:)
+ real,            intent(in)    :: eos_vars(:,:)
+ real(kind=4),    intent(in)    :: gradh(:,:)
+ integer(kind=1), intent(inout) :: ibin_wake(:)
+ integer(kind=1), intent(in)    :: ibinnow_m1
+ real,            intent(in)    :: stressmax
+ real,            intent(in)    :: xyzcache(:,:)
+ real,            intent(in)    :: rad(:,:)
+ real,            intent(inout) :: radprop(:,:)
+ real,            intent(in)    :: dens(:),metrics(:,:,:,:)
+ real,            intent(in)    :: dt
+ integer(kind=1), intent(in)    :: apr_level(:)
 
  real                            :: hi
  real(kind=8)                    :: hi1,hi21,hi31,hi41
@@ -2606,7 +2647,8 @@ subroutine compute_cell(cell,listneigh,nneigh,Bevol,xyzh,vxyzu,fxyzu, &
 end subroutine compute_cell
 
 subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dvdx,&
-                                         divBsymm,divcurlv,dBevol,ddustevol,deltav,dustgasprop,fxyz_drag,fext,dragreg, &
+                                         divBsymm,divcurlv,dBevol,ddustevol,deltav,dustgasprop,Vrel_disp, &
+                                         fxyz_drag,fext,dragreg, &
                                          filfac,dtcourant,dtforce,dtvisc,dtohm,dthall,dtambi,dtdiff,dtmini,dtmaxi, &
 #ifdef IND_TIMESTEPS
                                          nbinmaxnew,ncheckbin, &
@@ -2645,7 +2687,7 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
  use neighkdtree,    only:get_distance_from_centre_of_mass
  use kdtree,         only:expand_fgrav_in_taylor_series
  use nicil,          only:nicil_get_dudt_nimhd,nicil_get_dt_nimhd
- use timestep,       only:C_cour,C_cool,C_force,C_rad,bignumber,dtmax,psidecayfac,overcleanfac
+ use timestep,       only:C_cour,C_force,C_rad,bignumber,dtmax,psidecayfac,overcleanfac
  use units,          only:get_c_code
  use eos_shen,       only:eos_shen_get_dTdu
  use metric_tools,   only:unpack_metric
@@ -2657,43 +2699,45 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
  use part,           only:Omega_k
  use io,             only:warning
  use physcon,        only:c,kboltz
- integer,            intent(in)    :: icall
- type(cellforce),    intent(inout) :: cell
- real,               intent(inout) :: fxyzu(:,:)
- real,               intent(in)    :: xyzh(:,:)
- real,               intent(inout) :: vxyzu(:,:)
- real,               intent(in)    :: dt
- real(kind=4),       intent(in)    :: dvdx(:,:)
- real(kind=4),       intent(out)   :: poten(:)
- real(kind=4),       intent(out)   :: divBsymm(:)
- real(kind=4),       intent(out)   :: divcurlv(:,:)
- real,               intent(out)   :: dBevol(:,:)
- real,               intent(out)   :: ddustevol(:,:)
- real,               intent(out)   :: deltav(:,:,:)
- real,               intent(out)   :: dustgasprop(:,:)
- real,               intent(in)    :: filfac(:)
- integer,            intent(out)   :: dragreg(:)
- real,               intent(inout) :: fxyz_drag(:,:)
- real,               intent(in)    :: fext(:,:)
- real,               intent(inout) :: dtcourant,dtforce,dtvisc
- real,               intent(inout) :: dtohm,dthall,dtambi,dtdiff,dtmini,dtmaxi
+ use eos_stamatellos,only:duSPH
+ integer,         intent(in)    :: icall
+ type(cellforce), intent(inout) :: cell
+ real,            intent(inout) :: fxyzu(:,:)
+ real,            intent(in)    :: xyzh(:,:)
+ real,            intent(inout) :: vxyzu(:,:)
+ real,            intent(in)    :: dt
+ real(kind=4),    intent(in)    :: dvdx(:,:)
+ real(kind=4),    intent(out)   :: poten(:)
+ real(kind=4),    intent(out)   :: divBsymm(:)
+ real(kind=4),    intent(out)   :: divcurlv(:,:)
+ real,            intent(out)   :: dBevol(:,:)
+ real,            intent(out)   :: ddustevol(:,:)
+ real,            intent(out)   :: deltav(:,:,:)
+ real,            intent(out)   :: dustgasprop(:,:)
+ real,            intent(out)   :: Vrel_disp(:)
+ real,            intent(in)    :: filfac(:)
+ integer,         intent(out)   :: dragreg(:)
+ real,            intent(inout) :: fxyz_drag(:,:)
+ real,            intent(in)    :: fext(:,:)
+ real,            intent(inout) :: dtcourant,dtforce,dtvisc
+ real,            intent(inout) :: dtohm,dthall,dtambi,dtdiff,dtmini,dtmaxi
 #ifdef IND_TIMESTEPS
- integer,            intent(inout) :: nbinmaxnew,ncheckbin
- integer,            intent(inout) :: ndtforce,ndtforceng,ndtcool,ndtdrag,ndtdragd
- integer,            intent(inout) :: ndtvisc,ndtohm,ndthall,ndtambi,ndtdust,ndtrad,ndtclean
- real,               intent(inout) :: dtitmp,dtrat
- real,               intent(inout) :: dtfrcfacmean ,dtfrcngfacmean,dtdragfacmean ,dtdragdfacmean,dtcoolfacmean
- real,               intent(inout) :: dtfrcfacmax  ,dtfrcngfacmax ,dtdragfacmax  ,dtdragdfacmax ,dtcoolfacmax
- real,               intent(inout) :: dtviscfacmean,dtohmfacmean  ,dthallfacmean ,dtambifacmean ,dtdustfacmean
- real,               intent(inout) :: dtviscfacmax ,dtohmfacmax   ,dthallfacmax  ,dtambifacmax  ,dtdustfacmax
- real,               intent(inout) :: dtradfacmean ,dtcleanfacmean
- real,               intent(inout) :: dtradfacmax  ,dtcleanfacmax
+ integer, intent(inout) :: nbinmaxnew,ncheckbin
+ integer, intent(inout) :: ndtforce,ndtforceng,ndtcool,ndtdrag,ndtdragd
+ integer, intent(inout) :: ndtvisc,ndtohm,ndthall,ndtambi,ndtdust,ndtrad,ndtclean
+ real,    intent(inout) :: dtitmp,dtrat
+ real,    intent(inout) :: dtfrcfacmean,dtfrcngfacmean,dtdragfacmean,dtdragdfacmean,dtcoolfacmean
+ real,    intent(inout) :: dtfrcfacmax,dtfrcngfacmax,dtdragfacmax,dtdragdfacmax,dtcoolfacmax
+ real,    intent(inout) :: dtviscfacmean,dtohmfacmean,dthallfacmean,dtambifacmean,dtdustfacmean
+ real,    intent(inout) :: dtviscfacmax,dtohmfacmax,dthallfacmax,dtambifacmax,dtdustfacmax
+ real,    intent(inout) :: dtradfacmean,dtcleanfacmean
+ real,    intent(inout) :: dtradfacmax,dtcleanfacmax
 #endif
- integer,            intent(inout) :: ndustres
- real,               intent(inout) :: dustresfacmean,dustresfacmax
- real,               intent(in)    :: rad(:,:),radprop(:,:)
- real,               intent(out)   :: drad(:,:)
- real,               intent(inout) :: dtrad
+ integer, intent(inout) :: ndustres
+ real,    intent(inout) :: dustresfacmean,dustresfacmax
+ real,    intent(in)    :: rad(:,:),radprop(:,:)
+ real,    intent(out)   :: drad(:,:)
+ real,    intent(inout) :: dtrad
  real    :: c_code,dtradi,radlambdai,radkappai
  real    :: xpartveci(maxxpartveciforce),fsum(maxfsum)
  real    :: rhoi,rho1i,rhogasi,hi,hi1,pmassi,tempi,gammai
@@ -3043,17 +3087,19 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
                 endif
                 fxyz4 = fxyz4 + fac*dudtcool
              endif
-             if (icooling == 9) call energ_cooling(xi,yi,zi,vxyzu(4,i),rhoi,dt,divcurlv(1,i),&
-                                                   dudtcool,duhydro=fxyz4,ipart=i)
           endif
-          if ((do_radiation .and. implicit_radiation) .or. icooling == 9) then
-             ! store the du/dt in the luminosity array
+          if (do_radiation .and. implicit_radiation) then
              luminosity(i) = real(pmassi*fxyz4,kind=kind(luminosity))
           else
-             if (maxvxyzu >= 4) fxyzu(4,i) = fxyz4
+             if (maxvxyzu >= 4) then
+                fxyzu(4,i) = fxyz4
+                if (icooling == 9) then
+                   call energ_cooling(xi,yi,zi,vxyzu(4,i),rhoi,dt,divcurlv(1,i),dudtcool,duhydro=fxyz4,ipart=i)
+                   dusph(i) = fxyz4
+                endif
+             endif
           endif
        endif
-
        if (mhd) then
           !
           ! sum returns d(B/rho)/dt, just what we want!
@@ -3084,6 +3130,9 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
           deltav(1,:,i)  = fsum(ideltavxi:ideltavxiend)
           deltav(2,:,i)  = fsum(ideltavyi:ideltavyiend)
           deltav(3,:,i)  = fsum(ideltavzi:ideltavziend)
+          if (use_dustgrowth) then !-get dust velocity dispersion in the kernel for dust as a mixture
+             Vrel_disp(i) = sqrt(fsum(ivreldispxi)**2 + fsum(ivreldispyi)**2 + fsum(ivreldispzi)**2)
+          endif
        endif
        ! timestep based on Courant condition
        vsigdtc = max(vsigmax,vwavei)
@@ -3093,7 +3142,9 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
 
        ! cooling timestep dt < fac*u/(du/dt)
        if (maxvxyzu >= 4 .and. .not. gr .and. .not. (ieos==23)) then ! not with gr which uses entropy
-          if (eni + dtc*fxyzu(4,i) < epsilon(0.) .and. eni > epsilon(0.)) dtcool = C_cool*abs(eni/fxyzu(4,i))
+          if (eni + dtc*fxyzu(4,i) < epsilon(0.) .and. eni > epsilon(0.)) then
+             fxyzu(4,i) =  fxyzu(4,i)/(1.-dtc*fxyzu(4,i)/eni) ! change dudt to avoid negative energy
+          endif
        endif
 
        ! s entropy timestep to avoid too large s entropy leads to infinite temperature
@@ -3123,9 +3174,14 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
        if (use_dustgrowth .and. iamdusti) then
           !- return interpolations to their respective arrays
           dustgasprop(2,i) = fsum(idensgasi) !- rhogas
-          !- interpolations are mass weigthed, divide result by rhog,i
-          dustgasprop(4,i) = sqrt(fsum(idvix)**2 + fsum(idviy)**2 + fsum(idviz)**2)/dustgasprop(2,i) !- |dv|
-          dustgasprop(1,i) = fsum(icsi)/dustgasprop(2,i) !- sound speed
+          if (dustgasprop(2,i) > 0.) then
+             !- interpolations are mass weigthed, divide result by rhog,i
+             dustgasprop(4,i) = sqrt(fsum(idvix)**2 + fsum(idviy)**2 + fsum(idviz)**2)/dustgasprop(2,i) !- |dv|
+             dustgasprop(1,i) = fsum(icsi)/dustgasprop(2,i) !- sound speed
+          else
+             dustgasprop(4,i) = 0.
+             dustgasprop(1,i) = 0.
+          endif
 
           !- get the Stokes number with get_ts using the interpolated quantities
           rhoi             = xpartveci(irhoi)
@@ -3140,6 +3196,9 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
              dustgasprop(2,i),rhoi,dustgasprop(1,i),dustgasprop(4,i)**2,tstopint,ireg)
           endif
           dustgasprop(3,i) = tstopint * Omega_k(i) !- Stokes number
+
+          !-get dust relative velocity in the kernel, sum all dimensions quadratically
+          Vrel_disp(i) = sqrt(fsum(ivreldispxi)**2 + fsum(ivreldispyi)**2 + fsum(ivreldispzi)**2)
        endif
 
        if (maxvxyzu > 4) fxyzu(4,i) = 0.
@@ -3255,6 +3314,7 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
 
     dtcourant = min(dtcourant,dtc)
     dtforce   = min(dtforce,dtf,dtcool,dtdrag,dtdusti,dtclean,dtent)
+
     dtvisc    = min(dtvisc,dtvisci)
     if (mhd_nonideal .and. iamgasi) then
        dtohm  = min(dtohm,  dtohmi  )
@@ -3264,6 +3324,7 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
     dtmini  = min(dtmini,dti)
     dtmaxi  = max(dtmaxi,dti)
     dtrad   = min(dtrad,dtradi)
+
 #endif
  enddo over_parts
 end subroutine finish_cell_and_store_results
@@ -3275,9 +3336,9 @@ end subroutine finish_cell_and_store_results
 !+
 !-----------------------------------------------------------------------------
 subroutine reconstruct_dv(projv,dx,dy,dz,rx,ry,rz,dvdxi,dvdxj,projvstar,ilimiter)
- real, intent(in)  :: projv,dx,dy,dz,rx,ry,rz,dvdxi(9),dvdxj(9)
- real, intent(out) :: projvstar
- integer, intent(in) :: ilimiter
+ real,    intent(in)  :: projv,dx,dy,dz,rx,ry,rz,dvdxi(9),dvdxj(9)
+ real,    intent(out) :: projvstar
+ integer, intent(in)  :: ilimiter
  real :: slopei,slopej,slope,sep
 
  sep = 0.5
@@ -3315,9 +3376,9 @@ end subroutine reconstruct_dv
 !+
 !-----------------------------------------------------------------------------
 subroutine reconstruct_dv_gr(projvi,projvj,rx,ry,rz,dr,dvdxi,dvdxj,projvstari,projvstarj,ilimiter)
- real, intent(in)  :: projvi,projvj,rx,ry,rz,dr,dvdxi(9),dvdxj(9)
- real, intent(out) :: projvstari,projvstarj
- integer, intent(in) :: ilimiter
+ real,    intent(in)  :: projvi,projvj,rx,ry,rz,dr,dvdxi(9),dvdxj(9)
+ real,    intent(out) :: projvstari,projvstarj
+ integer, intent(in)  :: ilimiter
  real :: slopei,slopej,slope
 
  ! CAUTION: here we use dx, not the unit vector to
@@ -3396,9 +3457,9 @@ end function slope_limiter_gr
 !-----------------------------------------------------------------------------
 subroutine get_drag_terms(tsijtmp,dt,sdrag1,sdrag2,fxi_drag,fyi_drag,fzi_drag,&
                           runix,runiy,runiz,fxyz_drag,projf_drag)
- real,      intent(in)    :: tsijtmp,dt,fxi_drag,fyi_drag,fzi_drag,runix,runiy,runiz
- real,      intent(in)    :: fxyz_drag(:)
- real,      intent(out)   :: sdrag1,sdrag2,projf_drag
+ real, intent(in)  :: tsijtmp,dt,fxi_drag,fyi_drag,fzi_drag,runix,runiy,runiz
+ real, intent(in)  :: fxyz_drag(:)
+ real, intent(out) :: sdrag1,sdrag2,projf_drag
 
  projf_drag = (fxi_drag - fxyz_drag(1))*runix + (fyi_drag - fxyz_drag(2))*runiy + (fzi_drag - fxyz_drag(3))*runiz
 

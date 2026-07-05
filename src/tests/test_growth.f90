@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -103,7 +103,7 @@ subroutine test_farmingbox(ntests,npass,frag,onefluid)
  use testutils,      only:checkvalbuf,checkvalbuf_end
  use eos,            only:ieos,polyk,gamma,get_spsound
  use dust,           only:idrag,init_drag
- use growth,         only:ifrag,init_growth,isnow,vfrag,gsizemincgs,get_size,alpha_dg
+ use growth,         only:ifrag,init_growth,isnow,vfrag,gsizemincgs,get_size,alpha_dg,ivrelkin
  use options,        only:alpha,alphamax,use_dustfrac
  use unifdis,        only:set_unifdis
  use dim,            only:periodic,mhd,use_dust,maxp,maxalpha
@@ -214,7 +214,7 @@ subroutine test_farmingbox(ntests,npass,frag,onefluid)
        dustfrac(:,i) = 0.
        deltav(:,:,i) = 0.
        dustgasprop(:,i) = 0.
-       VrelVf(i)        = 0.
+       VrelVf(:,i)      = 0.
        if (use_dustfrac) then
           dustfrac(1,i) = dtgratio
           dustprop(1,i) = fourpi/3.*dens*sinit**3
@@ -246,7 +246,7 @@ subroutine test_farmingbox(ntests,npass,frag,onefluid)
           dustprop(1,i) = fourpi/3.*dens*sinit**3
           dustprop(2,i) = dens
           dustgasprop(:,i) = 0.
-          VrelVf(i)        = 0.
+          VrelVf(:,i)      = 0.
        endif
        call set_particle_type(i,itype)
     enddo
@@ -268,11 +268,12 @@ subroutine test_farmingbox(ntests,npass,frag,onefluid)
  idrag         = 1
  if (frag) then
     ifrag      = 1
-    alpha_dg = 2.5e-2
+    alpha_dg   = 2.5e-2
  else
     ifrag      = 0
-    alpha_dg = 1.e-2
+    alpha_dg   = 1.e-2
  endif
+ ivrelkin     = 1
  isnow        = 0
  vfrag        = 1.e-11
  gsizemincgs  = 1.e-2
@@ -368,12 +369,12 @@ end subroutine test_farmingbox
 
 subroutine write_file_err(step,t,xyzh,gsize,gsize_exact,St,St_exact,npart,prefix)
  use part,                     only:iamdust,iphase,iamgas
- real, intent(in)              :: t
- real, intent(in)              :: xyzh(:,:)
- real, intent(in)              :: St(:),St_exact(:)
- real(kind=8), intent(in)      :: gsize(:),gsize_exact(:)
- character(len=*), intent(in)  :: prefix
- integer, intent(in)           :: npart,step
+ real,             intent(in) :: t
+ real,             intent(in) :: xyzh(:,:)
+ real,             intent(in) :: St(:),St_exact(:)
+ real(kind=8),     intent(in) :: gsize(:),gsize_exact(:)
+ character(len=*), intent(in) :: prefix
+ integer,          intent(in) :: npart,step
  character(len=30)             :: filename,str
  integer                       :: i,lu
 

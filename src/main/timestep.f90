@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -34,6 +34,8 @@ module timestep
 
  ! internal global variables
  real    :: dt,dtcourant,dtforce,dtrad,dtextforce,dterr,dtdiff,dtinject,time
+ ! cached min GR force timestep limits (set in kickdrift_gr / kickdrift_grsink)
+ real    :: dtf_gr_min,dtf_gr_ptmass_min
 
  real, parameter :: bignumber = 1.e29
 
@@ -70,8 +72,8 @@ subroutine print_dtlog(iprint,time,dt,dtforce,dtcourant,dterr,dtmax,&
                        dtrad,dtprint,dtinj,np)
  integer,         intent(in) :: iprint
  real,            intent(in) :: time,dt,dtforce,dtcourant,dterr,dtmax,dtrad
- real,            intent(in), optional :: dtprint,dtinj
  integer(kind=8), intent(in) :: np
+ real,            intent(in), optional :: dtprint,dtinj
  character(len=20) :: str
  integer(kind=8), save :: nplast = 0
 

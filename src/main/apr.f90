@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -14,10 +14,9 @@ module apr
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: apr_region, cons2primsolver, dim, eos, extern_gr,
-!   externalforces, get_apr_level, io, io_summary, kdtree, metric_tools,
-!   mpiforce, neighkdtree, options, part, physcon, quitdump, random,
-!   relaxem, timestep_ind, utils_apr, vectorutils
+! :Dependencies: apr_region, dim, get_apr_level, io, io_summary, kdtree,
+!   mpiforce, neighkdtree, part, physcon, quitdump, relaxem, utils_apr,
+!   vectorutils
 !
  use dim, only:gr,use_apr
  use apr_region
@@ -30,7 +29,7 @@ module apr
 
  private
  real    :: sep_factor = 0.2
- logical :: apr_verbose = .false.
+ logical :: apr_verbose = .true.
  logical :: do_relax = .false.
  logical :: adjusted_split = .true.
 
@@ -47,7 +46,8 @@ subroutine init_apr(apr_level,ierr)
  use utils_apr,     only:ntrack_max
  use get_apr_level, only:set_get_apr
  use io_summary,    only:print_apr,iosum_apr
- use io,            only:warning
+ use io,            only:warning,fatal
+ use dim,           only:maxvxyzu
  integer,         intent(inout) :: ierr
  integer(kind=1), intent(inout) :: apr_level(:)
  logical :: previously_set
@@ -118,6 +118,11 @@ subroutine init_apr(apr_level,ierr)
  npart_regions = 0
  icentre = 1 ! to initialise
 
+ ! certain splitdir need certain things
+ if (maxvxyzu < 4 .and. split_dir == 2) then
+    call fatal('init_apr','split_dir == 2 not compatible with choice of eos')
+ endif
+
  ierr = 0
 
  ! print summary please
@@ -135,9 +140,10 @@ end subroutine init_apr
 !+
 !-----------------------------------------------------------------------
 subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
+!$ use omp_lib
  use dim,        only:maxp,ind_timesteps,maxvxyzu
  use part,       only:ntot,isdead_or_accreted,igas,aprmassoftype,&
-                    shuffle_part,iphase,iactive,maxp
+                    shuffle_part,iphase,iactive,maxp,npartoftype
  use part,       only:igasP,rhoh,eos_vars,iorig
  use quitdump,   only:quit
  use relaxem,    only:relax_particles
@@ -150,12 +156,14 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  real,    intent(inout)         :: xyzh(:,:),vxyzu(:,:),fxyzu(:,:)
  integer, intent(inout)         :: npart
  integer(kind=1), intent(inout) :: apr_level(:)
- integer :: ii,jj,kk,npartnew,nsplit_total,apri,npartold,ll
- integer :: n_ref,nrelax,nmerge,nkilled,apr_current,nmerge_total
+ integer :: ii,jj,kk,npartnew,nsplit_total,apri,npartold,ll,idx_len,j,apr_last
+ integer :: n_ref,nrelax,nmerge,nkilled,nmerge_total,mm,n_to_split,iclosest,localtmp
  real, allocatable :: xyzh_ref(:,:),force_ref(:,:),pmass_ref(:)
- real, allocatable :: xyzh_merge(:,:),vxyzu_merge(:,:)
- integer, allocatable :: relaxlist(:),mergelist(:),iclosest
- real :: get_apr_in(3),ientropy,P_i,pmassi,rhoi
+ real, allocatable :: xyzh_merge(:,:),vxyzu_merge(:,:), rneighs(:)
+ integer, allocatable :: relaxlist(:),mergelist(:),should_split(:)
+ integer, allocatable :: idx_merge(:),should_merge(:),scan_array(:),idx_split(:)
+ real :: get_apr_in(3),ientropy,P_i,pmassi,rhoi,xi,yi,zi,dx,dy,dz,rmin_local
+ logical :: relax_in_loop
 
  ! if this routine doesn't need to be used, just skip it
  if (apr_max == 1) return
@@ -163,7 +171,6 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  if (npart >= 0.9*maxp) then
     call fatal('apr','maxp is not large enough; set --maxp on the command line to something larger than ',var='maxp',ival=maxp)
  endif
-
  ! if the centre of the region can move, update it
  call set_apr_centre(apr_type,apr_centre,ntrack,track_part)
 
@@ -209,6 +216,9 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  nsplit_total = 0
  nrelax = 0
  apri = 0 ! to avoid compiler errors
+ apr_last = 0
+ ! generally a safe guess, gets checked later
+ allocate(scan_array(npart*apr_max),rneighs(npart*apr_max),idx_split(npart*apr_max),should_split(maxp))
 
  if (apr_verbose) print*,'started splitting'
 
@@ -216,40 +226,126 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
     do ll = 1,ntrack ! for multiple regions
        icentre = ll
        npartold = npartnew ! to account for new particles as they are being made
-       split_over_active: do ii = 1,npartold
+       should_split(:) = 0 ! reset
+       rneighs(:) = 0.
+       idx_split(:) = 0
+       n_to_split = 0
 
+       !$omp parallel default(none) &
+       !$omp shared(npartold,iphase,apr_level,xyzh,should_split,get_apr,icentre) &
+       !$omp shared(idx_split) &
+       !$omp private(ii,get_apr_in,apri) &
+       !$omp reduction(+:nsplit_total,n_to_split) reduction(max:apr_last)
+       !$omp do
+       split_over_active: do ii = 1,npartold
           ! only do this on active particles
           if (ind_timesteps) then
              if (.not.iactive(iphase(ii))) cycle split_over_active
           endif
 
-          apr_current = apr_level(ii)
-          get_apr_in(1) = xyzh(1,ii)
-          get_apr_in(2) = xyzh(2,ii)
-          get_apr_in(3) = xyzh(3,ii)
+          get_apr_in(1:3) = xyzh(1:3,ii)
           ! this is the refinement level it *should* have based
           ! on it's current position
           call get_apr(get_apr_in,icentre,apri)
           ! if the level it should have is greater than the
           ! level it does have, increment it up one
-          if (apri > apr_current) then
-             pmassi = aprmassoftype(igas,apr_current)
-             P_i = eos_vars(igasP,ii)
-             rhoi = rhoh(xyzh(4,ii),pmassi)
-             ientropy = pmassi*(P_i*rhoi**(-gamma))
-             call splitpart(ii,npartnew)
-             if (do_relax .and. (gr .or. apri == top_level)) then
-                nrelax = nrelax + 2
-                relaxlist(nrelax-1) = ii
-                relaxlist(nrelax)   = npartnew
-             endif
+          if (apri > apr_level(ii)) then
+             should_split(ii) = 1 ! record that this should be split
              nsplit_total = nsplit_total + 1
-             entropy_count = entropy_count + 2
-             entropy_stored(entropy_count - 1:entropy_count) = 0.5*ientropy ! because we share it across both evenly
-             entropy_list(entropy_count - 1) = iorig(ii)
-             entropy_list(entropy_count) = iorig(npartnew)
+             n_to_split = n_to_split + 1
+             apr_last = apri
           endif
        enddo split_over_active
+       !$omp enddo
+       !$omp end parallel
+
+       ! reallocate if required; if this happens even once just use the biggest possible
+       if (n_to_split > size(scan_array)) then
+          deallocate(scan_array,rneighs,idx_split)
+          allocate(scan_array(maxp),rneighs(maxp),idx_split(maxp))
+       endif
+
+       ! create the scan array - this loop should *not* be parallelised
+       scan_array(:) = 0
+       do ii = 2,npartold
+          scan_array(ii) = scan_array(ii-1) + should_split(ii-1)
+       enddo
+
+       ! make the particle list
+       idx_len = n_to_split
+       npartnew = npartnew + idx_len ! total number of particles (for now)
+       npartoftype(igas) = npartoftype(igas) + n_to_split ! add to npartoftype
+       npart = npartnew ! for splitpart
+
+       ! exit here if there's nothing more to do
+       if (n_to_split == 0) cycle
+
+       !$omp parallel default(none) &
+       !$omp shared(npartold,should_split,idx_split,scan_array,idx_len) &
+       !$omp shared(rneighs,xyzh,adjusted_split) &
+       !$omp private(ii,mm,rmin_local,j,xi,yi,zi,dx,dy,dz)
+       !$omp do
+       do ii = 1,npartold
+          if (should_split(ii) == 1) then
+             idx_split(scan_array(ii) + 1) = ii
+          endif
+       enddo
+       !$omp enddo
+
+       if (adjusted_split) then
+          !$omp do schedule(dynamic)
+          do ii = 1,idx_len
+             mm = idx_split(ii) ! original particle that should be split
+             xi = xyzh(1,mm)
+             yi = xyzh(2,mm)
+             zi = xyzh(3,mm)
+
+             rmin_local = huge(1.0)
+
+             do j = 1,npartold
+                if (j == mm) cycle
+                dx = xi - xyzh(1,j)
+                dy = yi - xyzh(2,j)
+                dz = zi - xyzh(3,j)
+                rmin_local = min(rmin_local,dx*dx + dy*dy + dz*dz)
+             enddo
+             rneighs(ii) = sqrt(rmin_local)
+          enddo
+          !$omp enddo
+       endif
+       !$omp end parallel
+
+       ! if relaxing, make some adjustments here:
+       ! just use the first particle that has been marked to split
+       ! to establish if we should be relaxing at all
+       relax_in_loop = (do_relax .and. (gr .or. apr_last == top_level))
+
+       ! now go through and actually split them - this should *probably* not be parallelised
+       ! due to the content of the nested functions, idx_len probably isn't that long either
+       do ii = 1,idx_len
+          mm = idx_split(ii) ! original particle that should be split
+          kk = npartold + ii ! location in array for new particle
+          pmassi = aprmassoftype(igas,apr_level(mm))
+          P_i = eos_vars(igasP,mm)
+          rhoi = rhoh(xyzh(4,mm),pmassi)
+          ientropy = pmassi*(P_i*rhoi**(-gamma))
+          if (adjusted_split) then
+             call splitpart(mm,kk,rneigh=rneighs(ii))
+          else
+             call splitpart(mm,kk)
+          endif
+          if (relax_in_loop) then
+             relaxlist(nrelax + ii) = mm
+             relaxlist(nrelax + n_to_split + ii) = kk
+          endif
+          entropy_count = entropy_count + 2
+          entropy_stored(entropy_count - 1:entropy_count) = 0.5*ientropy ! because we share it across both evenly
+          entropy_list(entropy_count - 1) = iorig(mm)
+          entropy_list(entropy_count) = iorig(kk)
+       enddo
+
+       ! if relaxing, update the total number that will be relaxed
+       if (relax_in_loop) nrelax = nrelax + 2*n_to_split
     enddo
  enddo
 
@@ -262,7 +358,9 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  endif
 
  ! Do any particles need to be merged?
+ deallocate(scan_array)
  allocate(mergelist(npart),xyzh_merge(4,npart),vxyzu_merge(maxvxyzu,npart))
+ allocate(idx_merge(npart),should_merge(npart),scan_array(npart))
  npart_regions = 0
  nmerge_total = 0
  iclosest = 1
@@ -276,25 +374,55 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
        xyzh_merge = 0.
        vxyzu_merge = 0.
 
+       should_merge(:) = 0
+       scan_array(:) = 0
+       idx_merge(:) = 0
+
+       ! identify what should be merged
+       !$omp parallel do default(none) &
+       !$omp shared(npart,apr_level,kk,xyzh,vxyzu,ntrack,ll,should_merge,iphase,apr_centre) &
+       !$omp private(ii,iclosest) &
+       !$omp reduction(+:nmerge)
        merge_over_active: do ii = 1,npart
-          ! note that here we only do this process for particles that are not already counted in the blending region
           if ((apr_level(ii) == kk) .and. (.not.isdead_or_accreted(xyzh(4,ii)))) then ! avoid already dead particles
              if (ind_timesteps) then
                 if (.not.iactive(iphase(ii))) cycle merge_over_active
              endif
-             if (ntrack > 1) call find_closest_region(xyzh(1:3,ii),iclosest)
-             if (iclosest == ll) then
+             if (ntrack > 1) call find_closest_region(xyzh(1:3,ii),ntrack,apr_centre,iclosest)
+
+             if ((ntrack == 1) .or. (iclosest == ll)) then
+                should_merge(ii) = 1
                 nmerge = nmerge + 1
-                mergelist(nmerge) = ii
-                xyzh_merge(1:4,nmerge) = xyzh(1:4,ii)
-                vxyzu_merge(1:3,nmerge) = vxyzu(1:3,ii)
-                npart_regions(kk) = npart_regions(kk) + 1
              endif
           endif
        enddo merge_over_active
+       !$omp end parallel do
+
+       ! create the scan array - this loop should *not* be parallelised
+       scan_array(:) = 0
+       do ii = 2,npart
+          scan_array(ii) = scan_array(ii-1) + should_merge(ii-1)
+       enddo
+
+       !$omp parallel do default(none) &
+       !$omp shared(should_merge,idx_merge,scan_array,xyzh_merge,vxyzu_merge,kk) &
+       !$omp shared(xyzh,vxyzu,npart) &
+       !$omp private(ii,mm) &
+       !$omp reduction(+:npart_regions)
+       do ii = 1,npart
+          if (should_merge(ii) == 1) then
+             mm = scan_array(ii) + 1
+             idx_merge(mm) = ii
+             xyzh_merge(1:4,mm) = xyzh(1:4,ii)
+             vxyzu_merge(1:3,mm) = vxyzu(1:3,ii)
+             npart_regions(kk) = npart_regions(kk) + 1
+          endif
+       enddo
+       !$omp end parallel do
+
        if (apr_verbose) print*,nmerge,'particles selected for merge'
        ! Now send them to be merged
-       if (nmerge > 11) call merge_with_special_tree(nmerge,mergelist(1:nmerge),xyzh_merge(:,1:nmerge),&
+       if (nmerge > 11) call merge_with_special_tree(nmerge,idx_merge,xyzh_merge(:,1:nmerge),&
                                             vxyzu_merge(:,1:nmerge),kk,xyzh,vxyzu,apr_level,nkilled,&
                                             nrelax,relaxlist,npartnew,entropy_list,entropy_count,entropy_stored)
        nmerge_total = nmerge_total + nkilled ! actually merged
@@ -323,7 +451,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  if (do_relax) then
     deallocate(xyzh_ref,force_ref,pmass_ref)
  endif
- deallocate(mergelist,relaxlist)
+ deallocate(relaxlist,should_merge,idx_merge,scan_array,rneighs,idx_split,should_split)
 
  if (apr_verbose) print*,'total particles at end of apr: ',npart
 
@@ -344,183 +472,25 @@ end subroutine update_apr
 !  routine to split one particle into two
 !+
 !-----------------------------------------------------------------------
-subroutine splitpart(i,npartnew)
- use part,         only:copy_particle_all,apr_level,xyzh,vxyzu,npartoftype,igas,dens, &
-                        set_particle_type,metrics,metricderivs,fext,pxyzu,eos_vars,itemp, &
-                        igamma,igasP,aprmassoftype
+subroutine splitpart(i,i_new,rneigh)
+ use part,         only:xyzh
  use physcon,      only:pi
- use dim,          only:ind_timesteps
- use random,       only:ran2
  use vectorutils, only:cross_product3D,rotatevec
- use utils_apr,  only:apr_region_is_circle,icentre
- use metric_tools, only:pack_metric,pack_metricderivs
- use extern_gr, only:get_grforce
- integer, intent(in) :: i
- integer, intent(inout) :: npartnew
- integer :: j,npartold,next_door
- real :: theta,dx,dy,dz,x_add,y_add,z_add,sep,rneigh
- real :: v(3),u(3),w(3),a,b,c,mag_v,uold,hnew,pmass
- real :: angle1, angle2, angle3
- integer, save :: nangle = 1
- integer(kind=1) :: aprnew
-
- ! set the "random" vector directions using some irrational numbers
- ! this just increments a different irrational number for each
- ! and ensures it's between -0.5 -> 0.5
- angle1 = nangle*(1./sqrt(2.)) - nint(nangle*(1./sqrt(2.)))
- angle2 = nangle*(sqrt(2.) - 1.) - nint(nangle*(sqrt(2.) - 1.))
- angle3 = nangle*(pi - 3.) - nint(nangle*(pi - 3.))
- nangle = nangle + 1 ! for next round
+ use get_apr_level, only:split_dir_func
+ use dim, only:ind_timesteps
+ integer, intent(in) :: i,i_new
+ real, optional :: rneigh
+ real :: sep
 
  if (adjusted_split) then
-    call closest_neigh(i,next_door,rneigh)
     sep = min(sep_factor*xyzh(4,i),0.35*rneigh)
     sep = sep/xyzh(4,i)  ! for consistency later on
  else
     sep = sep_factor
  endif
 
- if (gr) then
-    sep = sep*xyzh(4,i)
+ call split_dir_func(i,i_new,sep)
 
-    npartold = npartnew
-    npartnew = npartold + 1
-    npartoftype(igas) = npartoftype(igas) + 1
-    apr_level(i) = apr_level(i) + int(1,kind=1) ! to prevent compiler warnings
-    call copy_particle_all(i,npartnew,new_part=.true.)
-    pmass = aprmassoftype(igas,apr_level(i))
-
-    uold = vxyzu(4,i)
-    hnew = xyzh(4,i)*(0.5**(1./3.))
-
-    ! new part forward
-    xyzh(4,npartnew) = hnew ! set new smoothing length
-    call integrate_geodesic_gr(pmass,xyzh(:,npartnew),vxyzu(:,npartnew),dens(npartnew),eos_vars(igasP,npartnew), &
-                            eos_vars(igamma,npartnew),eos_vars(itemp,npartnew),pxyzu(:,npartnew),sep)
-    call pack_metric(xyzh(1:3,npartnew),metrics(:,:,:,npartnew))
-    call pack_metricderivs(xyzh(1:3,npartnew),metricderivs(:,:,:,npartnew))
-    call get_grforce(xyzh(:,npartnew),metrics(:,:,:,npartnew),metricderivs(:,:,:,npartnew), &
-                     vxyzu(1:3,npartnew),dens(npartnew),vxyzu(4,npartnew),eos_vars(igasP,npartnew),fext(1:3,npartnew))
-    if (ind_timesteps) call put_in_smallest_bin(npartnew)
-
-    ! old part backward
-    ! switch direction
-    vxyzu(1:3,i) = -vxyzu(1:3,i)
-    pxyzu(1:3,i) = -pxyzu(1:3,i)
-    xyzh(4,i) = hnew
-    call integrate_geodesic_gr(pmass,xyzh(:,i),vxyzu(:,i),dens(i),eos_vars(igasP,i),eos_vars(igamma,i),eos_vars(itemp,i), &
-                           pxyzu(:,i),sep)
-    ! switch direction back
-    vxyzu(1:3,i) = -vxyzu(1:3,i)
-    pxyzu(1:3,i) = -pxyzu(1:3,i)
-    call pack_metric(xyzh(1:3,i),metrics(:,:,:,i))
-    call pack_metricderivs(xyzh(1:3,i),metricderivs(:,:,:,i))
-    call get_grforce(xyzh(:,i),metrics(:,:,:,i),metricderivs(:,:,:,i), &
-                     vxyzu(1:3,i),dens(i),vxyzu(4,i),eos_vars(igasP,i),fext(1:3,i))
-    if (ind_timesteps) call put_in_smallest_bin(i)
-
- else
-    if (split_dir == 2) then
-       sep = sep*xyzh(4,i)
-
-       npartold = npartnew
-       npartnew = npartold + 1
-       npartoftype(igas) = npartoftype(igas) + 1
-       apr_level(i) = apr_level(i) + int(1,kind=1) ! to prevent compiler warnings
-       call copy_particle_all(i,npartnew,new_part=.true.)
-       pmass = aprmassoftype(igas,apr_level(i))
-
-       uold = vxyzu(4,i)
-       hnew = xyzh(4,i)*(0.5**(1./3.))
-
-       ! new part forward
-       xyzh(4,npartnew) = hnew ! set new smoothing length
-       call integrate_geodesic(pmass,xyzh(:,npartnew),vxyzu(:,npartnew),sep,1.)
-       if (ind_timesteps) call put_in_smallest_bin(npartnew)
-
-       ! old part backward
-       ! switch direction
-       vxyzu(1:3,i) = -vxyzu(1:3,i)
-       xyzh(4,i) = hnew
-       call integrate_geodesic(pmass,xyzh(:,i),vxyzu(:,i),sep,1.)
-       ! switch direction back
-       vxyzu(1:3,i) = -vxyzu(1:3,i)
-       vxyzu(4,i) = uold
-       if (ind_timesteps) call put_in_smallest_bin(i)
-    else
-       ! Calculate the plane that the particle must be split along
-       ! to be tangential to the splitting region. Particles are split
-       ! on this plane but rotated randomly on it.
-
-       dx = xyzh(1,i) - apr_centre(1,icentre)
-       dy = xyzh(2,i) - apr_centre(2,icentre)
-       if (.not.apr_region_is_circle) then
-          dz = xyzh(3,i) - apr_centre(3,icentre)       ! for now, let's split about the CoM
-
-          if (split_dir == 1) then
-             ! Calculate a vector, v, that lies on the plane
-             u = (/1.0,0.5,1.0/)
-             w = (/dx,dy,dz/)
-             call cross_product3D(u,w,v)
-
-             ! rotate it around the normal to the plane by a random amount
-             theta = angle1*2.*pi
-             call rotatevec(v,w,theta)
-          else
-             ! No directional splitting, so just create a unit vector in a random direction
-             a = angle1
-             b = angle2
-             c = angle3
-             v = (/a, b, c/)
-          endif
-
-          mag_v = sqrt(dot_product(v,v))
-          if (mag_v > tiny(mag_v)) then
-             v = v/mag_v
-          else
-             v = 0.
-          endif
-       else
-          dz = 0.
-          u = 0.
-          w = 0.
-          v = 0.
-          theta = atan2(dy,dx) + 0.5*pi
-          v(1) = cos(theta)
-          v(2) = sin(theta)
-       endif
-
-       ! Now apply it
-       x_add = sep*v(1)*xyzh(4,i)
-       y_add = sep*v(2)*xyzh(4,i)
-       z_add = sep*v(3)*xyzh(4,i)
-
-       npartold = npartnew
-       npartnew = npartold + 1
-       npartoftype(igas) = npartoftype(igas) + 1
-       aprnew = apr_level(i) + int(1,kind=1) ! to prevent compiler warnings
-
-       !--create the new particle
-       do j=npartold+1,npartnew
-          call copy_particle_all(i,j,new_part=.true.)
-          xyzh(1,j) = xyzh(1,i) + x_add
-          xyzh(2,j) = xyzh(2,i) + y_add
-          xyzh(3,j) = xyzh(3,i) + z_add
-          vxyzu(:,j) = vxyzu(:,i)
-          xyzh(4,j) = xyzh(4,i)*(0.5**(1./3.))
-          apr_level(j) = aprnew
-          if (ind_timesteps) call put_in_smallest_bin(j)
-       enddo
-
-       ! Edit the old particle that was sent in and kept
-       xyzh(1,i) = xyzh(1,i) - x_add
-       xyzh(2,i) = xyzh(2,i) - y_add
-       xyzh(3,i) = xyzh(3,i) - z_add
-       apr_level(i) = aprnew
-       xyzh(4,i) = xyzh(4,i)*(0.5**(1./3.))
-       if (ind_timesteps) call put_in_smallest_bin(i)
-    endif
- endif
 end subroutine splitpart
 
 !-----------------------------------------------------------------------
@@ -538,19 +508,21 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  use part,          only:kill_particle,igas,igasP,igamma,eos_vars,rhoh
  use part,          only:combine_two_particles,aprmassoftype,iorig
  use dim,           only:ind_timesteps,maxvxyzu
- use get_apr_level, only:get_apr
+ use get_apr_level, only:get_apr,put_in_smallest_bin
  use physcon,       only:pi
  use utils_apr,     only:apr_centre
  use vectorutils, only:cross_product3D,matrixinvert3D
  use eos,           only:gamma
- integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew
- integer,         intent(inout) :: entropy_list(:),entropy_count
+ integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew,entropy_count
+ integer(kind=8), intent(inout) :: entropy_list(:)
  integer(kind=1), intent(inout) :: apr_level(:)
  integer,         intent(in)    :: current_apr,mergelist(:)
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
- integer :: remainder,icell,n_cell,apri,m,i,ierr,k,already_stored
+ integer :: remainder,icell,n_cell,apri,m,i,ierr,k,already_stored,localtmp
  integer :: eldest,tuther,testp,testpp,n,child_list(12),parent_list(6)
+ integer,         allocatable :: apri_at_cells_com(:)
+ real,            allocatable :: cells_com(:,:)
  real    :: com(3),pmassi,xyzh_fromicentre(3)
  real    :: r_ave,phi_ave,theta_ave,r_part,phi_part,ekin
  real    :: pos_com(3),vel_com(3),am(3),ogen,ogam(3),am_term(3)
@@ -558,7 +530,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  real    :: test_a,test_b,test_c,vec_a(3),vec_b(3),vec_c(3),u(3),v(3),w(3)
  real    :: lm(3),iner(3,3),lm_ave(3),term(3),omega(3),delta_ekin
  real    :: alpha,alpha1,alpha2,discriminant,A,B,C,un(3)
- real    :: ientropy, rho_eldest, rho_tuther, P_eldest, P_tuther, gammai
+ real    :: ientropy_tuther, rho_eldest, rho_tuther, P_eldest, P_tuther, gammai
  logical :: spherical
  type(cellforce)        :: cell
 
@@ -569,14 +541,20 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  call build_tree(nmerge,nmerge,xyzh_merge(:,1:nmerge),vxyzu_merge(:,1:nmerge),&
                       for_apr=.true.)
 
- ! Now use the centre of mass of each cell to check whether it should
- ! be merged or not
- com = 0.
- over_cells: do icell=1,int(ncells)
-    if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
+ allocate(cells_com(3,ncells),apri_at_cells_com(ncells))
+
+ spherical = .true.
+ ! get the center of the cell
+ !$omp parallel do default(none) schedule(dynamic) &
+ !$omp shared(ncells,leaf_is_active,inoderange,inodeparts,spherical) &
+ !$omp shared(xyzh_merge,apr_centre,icentre,cells_com) &
+ !$omp private(icell,n_cell,com,m,i) &
+ !$omp private(cell,r_ave,theta_ave,phi_ave,r_part,phi_part,xyzh_fromicentre)
+ over_cells_part0: do icell=1,int(ncells)
+    if (leaf_is_active(icell) == 0) cycle over_cells_part0 !--skip empty cells
     n_cell = inoderange(2,icell)-inoderange(1,icell)+1
 
-    spherical = .true.
+    com = 0.
     if (.not.spherical) then
        ! if not using spherical coordinates to check the cell location, just use existing info
        call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
@@ -609,8 +587,38 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
        com(3) = r_ave*cos(theta_ave)
        com(:) = com(:) + apr_centre(1:3,icentre) ! for sending back into get_apr
     endif
+    cells_com(:,icell) = com
+ enddo over_cells_part0
+ !$omp end parallel do
+ 
+ ! not sure how to parallelize this, so I am just gonna run it separately
+ over_cells_part1: do icell=1,int(ncells)
+    if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
+    call get_apr(cells_com(1:3,icell),icentre,apri)
+    apri_at_cells_com(icell) = apri
+ enddo over_cells_part1
 
-    call get_apr(com(1:3),icentre,apri)
+ ! Now use the centre of mass of each cell to check whether it should
+ ! be merged or not
+ !$omp parallel do default(none) schedule(dynamic) &
+ !$omp shared(xyzh,vxyzu,iorig,ncells,leaf_is_active,inoderange,inodeparts,spherical) &
+ !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist) &
+ !$omp shared(apr_centre,current_apr,aprmassoftype,mergelist,eos_vars,gamma) &
+ !$omp shared(apr_level,xyzh_merge,vxyzu_merge,entropy_count,entropy_list,entropy_stored) &
+ !$omp private(icell,n_cell,i,m,u,v,w,vec_a,vec_b,vec_c,test_a,test_b,test_c,testp,testpp,ierr) &
+ !$omp private(com,pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
+ !$omp private(apri,pmassi,ogen,ogam,Q,pdash,qdash,det,phi,lamb,es,un,iner,inv_iner,omega) &
+ !$omp private(r_part,sum_temp,s_min,S,gammai,parent_list,already_stored,localtmp,term) &
+ !$omp private(A,B,C,discriminant,alpha,alpha1,alpha2) &
+ !$omp private(eldest,rho_eldest,P_eldest) &
+ !$omp private(tuther,rho_tuther,P_tuther,ientropy_tuther) &
+ !$omp reduction(+:nkilled)
+ over_cells: do icell=1,int(ncells)
+    if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
+    n_cell = inoderange(2,icell)-inoderange(1,icell)+1
+
+    com = cells_com(:,icell)
+    apri = apri_at_cells_com(icell)
 
     ! If the apr level based on the com is lower than the current level,
     ! we merge!
@@ -735,24 +743,35 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           P_eldest = eos_vars(igasP,eldest)
           P_tuther = eos_vars(igasP,tuther)
           gammai = gamma
-          ientropy = 0.5*pmassi*((P_eldest*rho_eldest**(-gammai)) + (P_tuther*rho_tuther**(-gammai)))
           ! check to see if this particle has already been merged and is on the list
+          ientropy_tuther = 0.
           already_stored = -1
-          do k = 1, entropy_count
+          !$omp atomic capture
+          entropy_count = entropy_count + 1
+          localtmp = entropy_count
+          !$omp end atomic
+          do k = 1, localtmp-1
              if (entropy_list(k) == iorig(eldest)) already_stored = k
              ! this is in case it's been merged before, it's about to be killed
              ! by setting it to -1, it shouldn't be identified in adjust_entropy routine
-             if (entropy_list(k) == iorig(tuther)) entropy_list(k) = -1
+             if (entropy_list(k) == iorig(tuther)) then
+                entropy_list(k) = -1
+                ientropy_tuther = entropy_stored(k)
+             end if
           enddo
+          ! use stored ientropy when possible (instead of recomputing) to ensure entropy conservation
+          if (ientropy_tuther == 0.) ientropy_tuther = ientropy_tuther + 0.5*pmassi*P_tuther*rho_tuther**(-gammai)
           if (already_stored < 0) then
-             entropy_count = entropy_count + 1
-             entropy_stored(entropy_count) = ientropy
-             entropy_list(entropy_count) = iorig(eldest)
+             entropy_stored(localtmp) = 0.5*pmassi*P_eldest*rho_eldest**(-gammai) + ientropy_tuther
+             entropy_list(localtmp) = iorig(eldest)
           else
-             entropy_stored(k) = ientropy
+             entropy_stored(already_stored) = entropy_stored(already_stored) + ientropy_tuther
+             entropy_list(localtmp) = -1    ! data already stored in 'already_stored', so mark new space as ignored
           endif
 
           ! discard tuther ("the other")
+          ! Note: combine_two_particles calls kill_particle, which is not thread safe
+          ! Remedied by adding omp critical keyword to kill_particle subroutine
           call combine_two_particles(eldest,tuther)
           parent_list(m) = eldest
           apr_level(eldest) = apr_level(eldest) - int(1,kind=1)
@@ -760,13 +779,17 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           if (ind_timesteps) call put_in_smallest_bin(eldest)
 
           ! book-keeping
+          localtmp = nrelax
           if (do_relax) then
+             !$omp atomic capture
              nrelax = nrelax + 1
-             relaxlist(nrelax) = eldest
+             localtmp = nrelax
+             !$omp end atomic
+             relaxlist(localtmp) = eldest
           endif
 
           ! If this particle was on the shuffle list previously, take it off
-          do n = 1,nrelax
+          do n = 1,localtmp
              if (relaxlist(n) == tuther) relaxlist(n) = 0
           enddo
 
@@ -874,168 +897,10 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
     endif
 
  enddo over_cells
+ !$omp end parallel do
+
+ deallocate(cells_com,apri_at_cells_com)
 
 end subroutine merge_with_special_tree
-
-!-----------------------------------------------------------------------
-!+
-!  Find the closest neighbour to a particle (needs replacing)
-!+
-!-----------------------------------------------------------------------
-subroutine closest_neigh(i,next_door,rmin)
- use part, only:xyzh,npart
- integer, intent(in)  :: i
- integer, intent(out) :: next_door
- real,    intent(out) :: rmin
- real :: dx,dy,dz,rtest
- integer :: j
-
- ! DP note: this is not MPI safe...
- rmin = huge(rmin)
- next_door = 0
- do j = 1,npart
-    if (j == i) cycle
-    dx = xyzh(1,i) - xyzh(1,j)
-    dy = xyzh(2,i) - xyzh(2,j)
-    dz = xyzh(3,i) - xyzh(3,j)
-    rtest = dx**2 + dy**2 + dz**2
-    if (rtest < rmin) then
-       next_door = j
-       rmin = rtest
-    endif
- enddo
-
- rmin = sqrt(rmin)
-
-end subroutine closest_neigh
-
-!-----------------------------------------------------------------------
-!+
-!  routine to put a particle on the shortest timestep
-!+
-!-----------------------------------------------------------------------
-subroutine put_in_smallest_bin(i)
- use timestep_ind, only:nbinmax
- use part,         only:ibin
- integer, intent(in) :: i
-
- ibin(i) = nbinmax
-
-end subroutine put_in_smallest_bin
-
-!-----------------------------------------------------------------------
-!+
-!  Integrate particle along the geodesic
-!  Update vel and metric for best energy conservation
-!+
-!-----------------------------------------------------------------------
-subroutine integrate_geodesic_gr(pmass,xyzh,vxyzu,dens,pr,gamma,temp,pxyzu,dist)
- use extern_gr,      only:get_grforce
- use metric_tools,   only:pack_metric,pack_metricderivs
- use eos,            only:ieos,equationofstate
- use cons2primsolver,only:conservative2primitive
- use io,             only:warning
- use part,           only:rhoh,ien_type
- real, intent(inout) :: xyzh(:),vxyzu(:),pxyzu(:)
- real, intent(inout) :: dens,pr,gamma,temp,pmass
- real, intent(in)    :: dist
- real :: metrics(0:3,0:3,2),metricderivs(0:3,0:3,3),fext(3)
- real :: t,tend,v,dt
- real :: xyz(3),pxyz(3),eni,vxyz(1:3),uui,rho,spsoundi,pondensi
- integer :: ierr
-
- xyz       = xyzh(1:3)
- pxyz      = pxyzu(1:3)
- eni       = pxyzu(4)
- vxyz      = vxyzu(1:3)
- uui       = vxyzu(4)
- rho       = rhoh(xyzh(4),pmass)
-
- v = sqrt(dot_product(vxyz,vxyz))
- tend = dist/v
-
- call pack_metric(xyz,metrics(:,:,:))
- call pack_metricderivs(xyz,metricderivs(:,:,:))
- call get_grforce(xyzh(:),metrics(:,:,:),metricderivs(:,:,:),vxyz,dens,uui,pr,fext(1:3),dt)
-
- t = 0.
-
- do while (t <= tend)
-    dt = min(0.1,tend*0.1,dt)
-    t    = t + dt
-    pxyz = pxyz + dt*fext
-
-    call conservative2primitive(xyz,metrics(:,:,:),vxyz,dens,uui,pr,&
-                                       temp,gamma,rho,pxyz,eni,ierr,ien_type)
-    if (ierr > 0) call warning('cons2primsolver [in integrate_geodesic (a)]','did not converge')
-
-    xyz = xyz + dt*vxyz
-    call pack_metric(xyz,metrics(:,:,:))
-    call pack_metricderivs(xyz,metricderivs(:,:,:))
-
-    call equationofstate(ieos,pondensi,spsoundi,dens,xyzh(1),xyzh(2),xyzh(3),temp,uui)
-    pr = pondensi*dens
-
-    call get_grforce(xyzh(:),metrics(:,:,:),metricderivs(:,:,:),vxyzu(1:3),dens,vxyzu(4),pr,fext(1:3),dt)
- enddo
-
- xyzh(1:3) = xyz(1:3)
- vxyzu(1:3) = vxyz(1:3)
- pxyzu(1:3) = pxyz(1:3)
-
-end subroutine integrate_geodesic_gr
-
-!-----------------------------------------------------------------------
-!+
-!  Integrate particle along the geodesic
-!  Update vel and metric for best energy conservation
-!+
-!-----------------------------------------------------------------------
-subroutine integrate_geodesic(pmass,xyzh,vxyzu,dist,timei)
- use options,        only:iexternalforce
- use externalforces, only:externalforce,externalforce_vdependent
- use part,           only:rhoh
- real, intent(inout) :: xyzh(:),vxyzu(:)
- real, intent(in)    :: dist,timei,pmass
- real :: fext(3),fextv(3)
- real :: t,tend,v,dt,dens
- real :: xyz(3),vxyz(1:3),poti,uui
-
- xyz       = xyzh(1:3)
- vxyz      = vxyzu(1:3)
- fext      = 0.
- uui       = vxyzu(4)
- dens      = rhoh(xyzh(4),pmass)
-
- v = sqrt(dot_product(vxyz,vxyz))
- tend = dist/v
-
- if (iexternalforce > 0) then
-    call externalforce(iexternalforce,xyz(1),xyz(2),xyz(3),xyzh(4), &
-                                timei,fext(1),fext(2),fext(3),poti,dt)
-    call externalforce_vdependent(iexternalforce,xyz,vxyz,fextv,poti,dens,uui)
-    fext = fext + fextv
- endif
-
- t = 0.
-
- do while (t <= tend)
-    dt = min(0.1,tend*0.1,dt,0.1*dt)
-    t    = t + dt
-
-    vxyz = vxyz + dt*fext
-    xyz = xyz + dt*vxyz
-
-    if (iexternalforce > 0) then
-       call externalforce(iexternalforce,xyz(1),xyz(2),xyz(3),xyzh(4), &
-                                timei,fext(1),fext(2),fext(3),poti,dt)
-       call externalforce_vdependent(iexternalforce,xyz,vxyz,fextv,poti,dens,uui)
-       fext = fext + fextv
-    endif
- enddo
-
- xyzh(1:3) = xyz(1:3)
- vxyzu(1:3) = vxyz(1:3)
-end subroutine integrate_geodesic
 
 end module apr

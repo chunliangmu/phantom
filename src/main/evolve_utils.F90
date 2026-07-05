@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------!
 ! The Phantom Smoothed Particle Hydrodynamics code, by Daniel Price et al. !
-! Copyright (c) 2007-2025 The Authors (see AUTHORS)                        !
+! Copyright (c) 2007-2026 The Authors (see AUTHORS)                        !
 ! See LICENCE file for usage and distribution conditions                   !
 ! http://phantomsph.github.io/                                             !
 !--------------------------------------------------------------------------!
@@ -158,7 +158,7 @@ subroutine ptmass_create_and_update_forces(time,dtextforce)
     dummy = 0
     call get_force(nptmass,npart,0,1,time,dtextforce,xyzh,vxyzu,fext,xyzmh_ptmass,vxyz_ptmass,&
                    fxyz_ptmass,fxyz_ptmass_tree,dsdt_ptmass,0.,0.,dummy,.false.,bin_info,&
-                   group_info,nmatrix)
+                   group_info,nmatrix,recompute_gr_force=.true.)
  endif
 
 end subroutine ptmass_create_and_update_forces
@@ -408,7 +408,7 @@ subroutine print_timinginfo(iprint,nsteps,nsteplast)
  use timing, only:timer,timers,print_timer,itimer_fromstart,itimer_lastdump,&
                   itimer_step,itimer_balance,itimer_dens,&
                   itimer_force,itimer_ev,itimer_io,ntimers
- integer,      intent(in) :: iprint,nsteps,nsteplast
+ integer, intent(in) :: iprint,nsteps,nsteplast
  real                     :: dfrac,fracinstep
  real(kind=4)             :: time_fullstep
  character(len=20)        :: string,string1,string2,string3
