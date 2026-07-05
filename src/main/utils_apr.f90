@@ -268,25 +268,25 @@ subroutine adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
  integer :: i,ii
  real    :: pmassi,rhoi
 
-!$omp parallel default(none) &
-!$omp shared(entropy_count,entropy_list,entropy_stored) &
-!$omp shared(aprmassoftype,apr_level) &
-!$omp shared(iorig,xyzh,gamma) &
-!$omp shared(eos_vars,vxyzu) &
-!$omp private(i,ii,pmassi,rhoi)
-!$omp do
- do i = 1, entropy_count
-    if (entropy_list(i) < 0) cycle
-    ii = findloc(iorig,entropy_list(i),dim=1) ! this is the actual particle number
-    if (ii==0) cycle
-    pmassi = aprmassoftype(igas,apr_level(ii))
-    rhoi = rhoh(xyzh(4,ii),pmassi)
-    eos_vars(igasP,ii) = entropy_stored(i)*rhoi**(gamma)/pmassi       ! reset Pressure
-    vxyzu(4,ii) = eos_vars(igasP,ii)/((gamma - 1.) * rhoi)            ! reset internal energy
-    eos_vars(ics,ii) = sqrt(gamma*eos_vars(igasP,ii)/rhoi)           ! and reset sound speed
- enddo
-!$omp enddo
-!$omp end parallel
+! !$omp parallel default(none) &
+! !$omp shared(entropy_count,entropy_list,entropy_stored) &
+! !$omp shared(aprmassoftype,apr_level) &
+! !$omp shared(iorig,xyzh,gamma) &
+! !$omp shared(eos_vars,vxyzu) &
+! !$omp private(i,ii,pmassi,rhoi)
+! !$omp do
+!  do i = 1, entropy_count
+!     if (entropy_list(i) < 0) cycle
+!     ii = findloc(iorig,entropy_list(i),dim=1) ! this is the actual particle number
+!     if (ii==0) cycle
+!     pmassi = aprmassoftype(igas,apr_level(ii))
+!     rhoi = rhoh(xyzh(4,ii),pmassi)
+!     eos_vars(igasP,ii) = entropy_stored(i)*rhoi**(gamma)/pmassi       ! reset Pressure
+!     vxyzu(4,ii) = eos_vars(igasP,ii)/((gamma - 1.) * rhoi)            ! reset internal energy
+!     eos_vars(ics,ii) = sqrt(gamma*eos_vars(igasP,ii)/rhoi)           ! and reset sound speed
+!  enddo
+! !$omp enddo
+! !$omp end parallel
 
 end subroutine adjust_entropy
 
