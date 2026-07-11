@@ -594,8 +594,15 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  ! not sure how to parallelize this, so I am just gonna run it separately
  over_cells_part1: do icell=1,int(ncells)
     if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
-    call get_apr(cells_com(1:3,icell),icentre,apri)
-    apri_at_cells_com(icell) = apri
+    call get_apr(cells_com(1:3,icell),icentre,apri_at_cells_com(icell))
+    if (apri_at_cells_com(icell) >= current_apr) cycle over_cells_part1
+
+    n_cell = inoderange(2,icell)-inoderange(1,icell)+1
+    do m = 1,n_cell
+       i = inodeparts(inoderange(1,icell) + m - 1)
+       call get_apr(xyzh(1:3,i),icentre,apri)
+       if (apri_at_cells_com(icell) < apri) apri_at_cells_com(icell) = apri
+    enddo
  enddo over_cells_part1
 
  ! Now use the centre of mass of each cell to check whether it should
