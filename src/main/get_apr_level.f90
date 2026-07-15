@@ -118,9 +118,9 @@ end subroutine get_apr_sphere
 !+
 !-----------------------------------------------------------------------
 subroutine set_new_splitpart(i,i_new,v,sep)
- use part, only:xyzh, vxyzu, apr_level, copy_particle_all
- use dim,  only:ind_timesteps
- real,    intent(in) :: v(3), sep
+ use part, only:xyzh,vxyzu,apr_level,copy_particle_all,poten
+ use dim,  only:ind_timesteps,gravity
+ real,    intent(in) :: v(3),sep
  integer, intent(in) :: i,i_new
 
  real :: x_add, y_add, z_add
@@ -141,6 +141,10 @@ subroutine set_new_splitpart(i,i_new,v,sep)
  xyzh(4,i_new) = xyzh(4,i)*(0.5**(1./3.))
  apr_level(i_new) = aprnew
  if (ind_timesteps) call put_in_smallest_bin(i_new)
+ if (gravity) then
+    poten(i) = poten(i)*0.5    ! to conserve energy
+    poten(i_new) = poten(i_new)*0.5
+ endif
 
  ! Edit the old particle that was sent in and kept
  xyzh(1,i) = xyzh(1,i) - x_add
