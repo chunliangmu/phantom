@@ -424,7 +424,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
        ! Now send them to be merged
        if (nmerge > 11) call merge_with_special_tree(nmerge,idx_merge,xyzh_merge(:,1:nmerge),&
                                             vxyzu_merge(:,1:nmerge),kk,xyzh,vxyzu,apr_level,nkilled,&
-                                            nrelax,relaxlist,npartnew,entropy_list,entropy_count,entropy_stored)
+                                            nrelax,relaxlist,npartnew,entropy_list,entropy_count,entropy_stored,icentre)
        nmerge_total = nmerge_total + nkilled ! actually merged
        if (apr_verbose) then
           print*,'merged: ',nkilled,kk
@@ -501,7 +501,7 @@ end subroutine splitpart
 !-----------------------------------------------------------------------
 subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,current_apr,&
                                      xyzh,vxyzu,apr_level,nkilled,nrelax,relaxlist,npartnew,&
-                                     entropy_list,entropy_count,entropy_stored)
+                                     entropy_list,entropy_count,entropy_stored,icentre)
  use neighkdtree,   only:build_tree,ncells,leaf_is_active,get_cell_location
  use mpiforce,      only:cellforce
  use kdtree,        only:inodeparts,inoderange
@@ -516,7 +516,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew,entropy_count
  integer(kind=8), intent(inout) :: entropy_list(:)
  integer(kind=1), intent(inout) :: apr_level(:)
- integer,         intent(in)    :: current_apr,mergelist(:)
+ integer,         intent(in)    :: current_apr,mergelist(:),icentre
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
  integer :: remainder,icell,n_cell,apri,m,i,ierr,k,already_stored,localtmp
@@ -534,79 +534,23 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  logical :: spherical
  type(cellforce)        :: cell
 
- ! First ensure that we're only sending in groups of 12 to the tree
- remainder = modulo(nmerge,12)
+ ! First ensure that we're only sending in groups of 2 to the tree
+ remainder = modulo(nmerge,2)
  nmerge = nmerge - remainder
 
  call build_tree(nmerge,nmerge,xyzh_merge(:,1:nmerge),vxyzu_merge(:,1:nmerge),&
                       for_apr=.true.)
 
- allocate(cells_com(3,ncells),apri_at_cells_com(ncells))
-
- spherical = .true.
- ! get the center of the cell
- !$omp parallel do default(none) schedule(dynamic) &
- !$omp shared(ncells,leaf_is_active,inoderange,inodeparts,spherical) &
- !$omp shared(xyzh_merge,apr_centre,icentre,cells_com) &
- !$omp private(icell,n_cell,com,m,i) &
- !$omp private(cell,r_ave,theta_ave,phi_ave,r_part,phi_part,xyzh_fromicentre)
- over_cells_part0: do icell=1,int(ncells)
-    if (leaf_is_active(icell) == 0) cycle over_cells_part0 !--skip empty cells
-    n_cell = inoderange(2,icell)-inoderange(1,icell)+1
-
-    com = 0.
-    if (.not.spherical) then
-       ! if not using spherical coordinates to check the cell location, just use existing info
-       call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
-       com(1:3) = cell%xpos(1:3)
-    else
-       ! if spherical chosen, calculated the com in spherical coordinates and check
-       ! if that is within the boundary or not (convert back to cartesian com later on)
-       r_ave = 0.
-       theta_ave = 0.
-       phi_ave = 0.
-       ! spherically average the position of the particles around the current APR region
-       do m = 1,n_cell
-          i = inodeparts(inoderange(1,icell) + m - 1)
-          xyzh_fromicentre(1:3) = xyzh_merge(1:3,i) - apr_centre(1:3,icentre)
-          !print*,i,xyzh_merge(1:3,i)
-          r_part = sqrt(dot_product(xyzh_fromicentre(1:3),xyzh_fromicentre(1:3)))
-          r_ave = r_ave + r_part
-          theta_ave = theta_ave + acos(xyzh_fromicentre(3)/r_part)
-          phi_part = atan2(xyzh_fromicentre(2),xyzh_fromicentre(1))
-          !if (phi_ave < 0.) phi_ave = phi_ave + 2.*pi
-          phi_ave = phi_ave + phi_part
-       enddo
-       r_ave = r_ave/real(n_cell)
-       theta_ave = theta_ave/real(n_cell)
-       phi_ave = phi_ave/real(n_cell)
-
-       ! now convert back to cartesian equivalents
-       com(1) = r_ave*sin(theta_ave)*cos(phi_ave)
-       com(2) = r_ave*sin(theta_ave)*sin(phi_ave)
-       com(3) = r_ave*cos(theta_ave)
-       com(:) = com(:) + apr_centre(1:3,icentre) ! for sending back into get_apr
-    endif
-    cells_com(:,icell) = com
- enddo over_cells_part0
- !$omp end parallel do
- 
- ! not sure how to parallelize this, so I am just gonna run it separately
- over_cells_part1: do icell=1,int(ncells)
-    if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
-    call get_apr(cells_com(1:3,icell),icentre,apri)
-    apri_at_cells_com(icell) = apri
- enddo over_cells_part1
 
  ! Now use the centre of mass of each cell to check whether it should
  ! be merged or not
  !$omp parallel do default(none) schedule(dynamic) &
- !$omp shared(xyzh,vxyzu,iorig,ncells,leaf_is_active,inoderange,inodeparts,spherical) &
- !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist) &
+ !$omp shared(xyzh,vxyzu,iorig,ncells,leaf_is_active,inoderange,inodeparts,get_apr) &
+ !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist,icentre) &
  !$omp shared(apr_centre,current_apr,aprmassoftype,mergelist,eos_vars,gamma) &
  !$omp shared(apr_level,xyzh_merge,vxyzu_merge,entropy_count,entropy_list,entropy_stored) &
- !$omp private(icell,n_cell,i,m,u,v,w,vec_a,vec_b,vec_c,test_a,test_b,test_c,testp,testpp,ierr) &
- !$omp private(com,pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
+ !$omp private(icell,n_cell,i,m,n,u,v,w,vec_a,vec_b,vec_c,test_a,test_b,test_c,testp,testpp,ierr) &
+ !$omp private(pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
  !$omp private(apri,pmassi,ogen,ogam,Q,pdash,qdash,det,phi,lamb,es,un,iner,inv_iner,omega) &
  !$omp private(r_part,sum_temp,s_min,S,gammai,parent_list,already_stored,localtmp,term) &
  !$omp private(A,B,C,discriminant,alpha,alpha1,alpha2) &
@@ -617,8 +561,12 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
     if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
     n_cell = inoderange(2,icell)-inoderange(1,icell)+1
 
-    com = cells_com(:,icell)
-    apri = apri_at_cells_com(icell)
+    apri = 0
+    do m = 1,n_cell
+       i = inodeparts(inoderange(1,icell) + m - 1)
+       call get_apr(xyzh(1:3,i),icentre,n)
+       if (apri < n) apri = n
+    enddo
 
     ! If the apr level based on the com is lower than the current level,
     ! we merge!
@@ -651,255 +599,56 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
        ogen = ekin
        lm_ave(:) = lm(:)/(n_cell*pmassi)
 
-       ! adjust the particle positions to the com frame
-       do m = 1,n_cell
-          i = inodeparts(inoderange(1,icell) + m - 1)
-          xyzh_merge(1:3,i) = xyzh_merge(1:3,i) - pos_com(1:3)
-       enddo
-
-       ! calculate the quadrupole mass moment and the adjusted angular momentum
-       Q = 0.
-       do m = 1,n_cell
-          i = child_list(m)
-          r_part = dot_product(xyzh_merge(1:3,i),xyzh_merge(1:3,i))
-          Q(1,1) = Q(1,1) + pmassi*(3.*xyzh_merge(1,i)**2 - r_part)
-          Q(2,2) = Q(2,2) + pmassi*(3.*xyzh_merge(2,i)**2 - r_part)
-          Q(3,3) = Q(3,3) + pmassi*(3.*xyzh_merge(3,i)**2 - r_part)
-          Q(1,2) = Q(1,2) + pmassi*(3.*xyzh_merge(1,i)*xyzh_merge(2,i))
-          Q(1,3) = Q(1,3) + pmassi*(3.*xyzh_merge(1,i)*xyzh_merge(3,i))
-          Q(2,3) = Q(2,3) + pmassi*(3.*xyzh_merge(2,i)*xyzh_merge(3,i))
-          call cross_product3D(xyzh_merge(1:3,i),vxyzu_merge(1:3,i),am_term(:))
-          am(:) = am(:) + pmassi*am_term(:)
-       enddo
-       ! by definition
-       Q(2,1) = Q(1,2)
-       Q(3,1) = Q(1,3)
-       Q(3,2) = Q(2,3)
-       ogam(:) = am(:)
-
-       ! calculate the terms we need for the eigenvectors
-       pdash = -(Q(1,1)*Q(1,1) + Q(2,2)*Q(2,2) + Q(3,3)*Q(3,3) &
-           + 2.*Q(1,2)*Q(1,2) + 2.*Q(1,3)*Q(1,3) + 2.*Q(2,3)*Q(2,3))/2.
-       det =  Q(1,1)*(Q(2,2)*Q(3,3) - Q(2,3)*Q(3,2)) &
-            - Q(1,2)*(Q(2,1)*Q(3,3) - Q(2,3)*Q(3,1)) &
-            + Q(1,3)*(Q(2,1)*Q(3,2) - Q(2,2)*Q(3,1))
-       qdash = -det
-       phi = 1./3. * acos(3.*qdash * sqrt(-3/pdash)/(2*pdash))
-
-       ! I think we don't need to sort these as we take the shortest later
-       do m = 1,3
-          lamb(m) = 2.*sqrt(-pdash/3) * cos(phi - ((2.*pi * (m - 1))/3))
-       enddo
-
-       ! now construct the eigenvectors
-       do i = 1,3
-          u = (/Q(1,1) - lamb(i), Q(1,2), Q(1,3)/)
-          v = (/Q(2,1), Q(2,2) - lamb(i), Q(2,3)/)
-          w = (/Q(3,1), Q(3,2), Q(3,3) - lamb(i)/)
-
-          call cross_product3D(u,v,vec_a)
-          call cross_product3D(u,w,vec_b)
-          call cross_product3D(v,w,vec_c)
-
-          test_a = dot_product(vec_a,vec_a)
-          test_b = dot_product(vec_b,vec_b)
-          test_c = dot_product(vec_c,vec_c)
-
-          ! take the one that is longest (safest choice)
-          if ((test_a > test_b) .and. (test_a > test_c)) then
-             es(1:3,i) = vec_a/sqrt(test_a)
-          else if ((test_b > test_a) .and. (test_b > test_c)) then
-             es(1:3,i) = vec_b/sqrt(test_b)
-          else
-             es(1:3,i) = vec_c/sqrt(test_c)
-          endif
-       enddo
-
-       ! calculate the distances for the anti-podal pairs
-       sum_temp = 0.
-       do m = 1,n_cell
-          i = child_list(m)
-          r_part = dot_product(xyzh_merge(1:3,i),xyzh_merge(1:3,i))
-          sum_temp = sum_temp + 0.5/12. * r_part
-       enddo
-
-       s_min = 3.* abs(minval(lamb)) / (12.*pmassi)
-
-       S = max(sum_temp, s_min*1.05)
-
-       ! now calculate the distance vectors along these eigenvectors
-       do i = 1,3
-          dist(i) = sqrt((S/3.) + (lamb(i)/(12.*pmassi)))
-       enddo
+      !  ! adjust the particle positions to the com frame
+      !  do m = 1,n_cell
+      !     i = inodeparts(inoderange(1,icell) + m - 1)
+      !     xyzh_merge(1:3,i) = xyzh_merge(1:3,i) - pos_com(1:3)
+      !  enddo
 
        ! merge the first six particles with the last six particles
-       do m = 1,(n_cell/2)
-          eldest = mergelist(inodeparts(inoderange(1,icell) + m - 1)) ! remember we're running off the mergelist
-          tuther = mergelist(inodeparts(inoderange(1,icell) + m + 5)) ! + 5
 
-         !  ! save the entropy - we need this saved for later
-         !  rho_eldest = rhoh(xyzh(4,eldest),pmassi*0.5) ! I don't know why 0.5 is required here?!
-         !  rho_tuther = rhoh(xyzh(4,tuther),pmassi*0.5)
-         !  P_eldest = eos_vars(igasP,eldest)
-         !  P_tuther = eos_vars(igasP,tuther)
-         !  gammai = gamma
-         !  ! check to see if this particle has already been merged and is on the list
-         !  ientropy_tuther = 0.
-         !  already_stored = -1
-         !  !$omp atomic capture
-         !  entropy_count = entropy_count + 1
-         !  localtmp = entropy_count
-         !  !$omp end atomic
-         !  do k = 1, localtmp-1
-         !     if (entropy_list(k) == iorig(eldest)) already_stored = k
-         !     ! this is in case it's been merged before, it's about to be killed
-         !     ! by setting it to -1, it shouldn't be identified in adjust_entropy routine
-         !     if (entropy_list(k) == iorig(tuther)) then
-         !        entropy_list(k) = -1
-         !        ientropy_tuther = entropy_stored(k)
-         !     end if
-         !  enddo
-         !  ! use stored ientropy when possible (instead of recomputing) to ensure entropy conservation
-         !  if (ientropy_tuther == 0.) ientropy_tuther = ientropy_tuther + 0.5*pmassi*P_tuther*rho_tuther**(-gammai)
-         !  if (already_stored < 0) then
-         !     entropy_stored(localtmp) = 0.5*pmassi*P_eldest*rho_eldest**(-gammai) + ientropy_tuther
-         !     entropy_list(localtmp) = iorig(eldest)
-         !  else
-         !     entropy_stored(already_stored) = entropy_stored(already_stored) + ientropy_tuther
-         !     entropy_list(localtmp) = -1    ! data already stored in 'already_stored', so mark new space as ignored
-         !  endif
+       eldest = mergelist(inodeparts(inoderange(1,icell))) ! remember we're running off the mergelist
+       tuther = mergelist(inodeparts(inoderange(1,icell) + 1)) ! + 5
 
-          ! discard tuther ("the other")
-          ! Note: combine_two_particles calls kill_particle, which is not thread safe
-          ! Remedied by adding omp critical keyword to kill_particle subroutine
-          call combine_two_particles(eldest,tuther)
-          parent_list(m) = eldest
-          apr_level(eldest) = apr_level(eldest) - int(1,kind=1)
-          xyzh(4,eldest) = (xyzh(4,eldest))*(2.0**(1./3.)) ! rescale for its new mass
-          if (ind_timesteps) call put_in_smallest_bin(eldest)
-
-          ! book-keeping
+       ! discard tuther ("the other")
+       ! Note: combine_two_particles calls kill_particle, which is not thread safe
+       ! Remedied by adding omp critical keyword to kill_particle subroutine
+       call combine_two_particles(eldest,tuther)
+       apr_level(eldest) = apr_level(eldest) - int(1,kind=1)
+       xyzh(4,eldest) = (xyzh(4,eldest))*(2.0**(1./3.)) ! rescale for its new mass
+       if (ind_timesteps) call put_in_smallest_bin(eldest)
+ 
+       ! book-keeping
+       localtmp = nrelax
+       if (do_relax) then
+          !$omp atomic capture
+          nrelax = nrelax + 1
           localtmp = nrelax
-          if (do_relax) then
-             !$omp atomic capture
-             nrelax = nrelax + 1
-             localtmp = nrelax
-             !$omp end atomic
-             relaxlist(localtmp) = eldest
-          endif
+          !$omp end atomic
+         relaxlist(localtmp) = eldest
+       endif
 
-          ! If this particle was on the shuffle list previously, take it off
-          do n = 1,localtmp
-             if (relaxlist(n) == tuther) relaxlist(n) = 0
-          enddo
-
+       ! If this particle was on the shuffle list previously, take it off
+       do n = 1,localtmp
+          if (relaxlist(n) == tuther) relaxlist(n) = 0
        enddo
 
-       nkilled = nkilled + 12 ! this refers to the number of children killed
+       nkilled = nkilled + 2 ! this refers to the number of children killed
 
-       ! now adjust the particle positions accordingly - we adjust away from com later
-       ! particle 1:
-       testp = parent_list(1)
-       xyzh(1:3,testp) = dist(1) * es(:,1)
-
-       ! particle 2:
-       testpp = parent_list(2)
-       xyzh(1:3,testpp) = -dist(1) * es(:,1)
-
-       ! particle 3:
-       testp = parent_list(3)
-       xyzh(1:3,testp) = dist(2) * es(:,2)
-
-       ! particle 4:
-       testpp = parent_list(4)
-       xyzh(1:3,testpp) = -dist(2) * es(:,2)
-
-       ! particle 5:
-       testp = parent_list(5)
-       xyzh(1:3,testp) = dist(3) * es(:,3)
-
-       ! particle 6:
-       testpp = parent_list(6)
-       xyzh(1:3,testpp) = -dist(3) * es(:,3)
-
-       ! now we set the velocities
-       ! first calculate the inertia tensor of the 6 new particles
-       iner(:,:) = 0.
        pmassi = 2.*pmassi
-       do m = 1,6
-          i = parent_list(m)
-          iner(1,1) = iner(1,1) + pmassi * (xyzh(2,i)**2 + xyzh(3,i)**2)
-          iner(2,2) = iner(2,2) + pmassi * (xyzh(1,i)**2 + xyzh(3,i)**2)
-          iner(3,3) = iner(3,3) + pmassi * (xyzh(1,i)**2 + xyzh(2,i)**2)
-          iner(1,2) = iner(1,2) - pmassi * (xyzh(1,i)*xyzh(2,i))
-          iner(1,3) = iner(1,3) - pmassi * (xyzh(1,i)*xyzh(3,i))
-          iner(2,3) = iner(2,3) - pmassi * (xyzh(2,i)*xyzh(3,i))
-       enddo
-
-       iner(2,1) = iner(1,2)
-       iner(3,1) = iner(1,3)
-       iner(3,2) = iner(2,3)
-
-       ! now invert the matrix and set the individual velocities
-       call matrixinvert3D(iner,inv_iner,ierr)
-       omega(:) = matmul(inv_iner,am)
-       do m = 1,6
-          i = parent_list(m)
-          call cross_product3D(omega,xyzh(1:3,i),term)
-          vxyzu(1:3,i) = lm_ave(1:3) + term
-       enddo
-
 
        ! and now account for kinetic energy:
        ! calculate the current kinetic energy
-       ekin = 0.
-       do m = 1,6
-          i = parent_list(m)
-          ekin = ekin + 0.5 * pmassi * dot_product(vxyzu(1:3,i),vxyzu(1:3,i))
-       enddo
+       ekin = 0.5 * pmassi * dot_product(vxyzu(1:3,eldest),vxyzu(1:3,eldest))
        ! and the difference between original and current is (what we need to match)
        delta_ekin = ekin - ogen
-
-       ! we write this out as a quadratic and solve the quadratic formula
-       B = 0.
-       do m = 1,6
-          i = parent_list(m)
-          un = xyzh(1:3,i) / sqrt(dot_product(xyzh(1:3,i),xyzh(1:3,i)))
-          B = B + pmassi * dot_product(vxyzu(1:3,i),un(:))
-       enddo
-       C = delta_ekin
-       A = 3.*pmassi
-
-       ! now we solve the quadratic
-       discriminant = B**2 - 4.*A*C
-       if (discriminant > 0.) then
-          alpha1 = (-B + sqrt(discriminant)) / (2.*A)
-          alpha2 = (-B - sqrt(discriminant)) / (2.*A)
-
-          ! and take the solution that has the same sign as delta_ekin
-          if (alpha1 * delta_ekin > 0.) then
-             alpha = alpha1
-          else
-             alpha = alpha2
-          endif
-       else
-          alpha = 0.
-       endif
-
-       ! finally, adjust the velocities accordingly and move the particles back to the simulation frame
-       do m = 1,6
-          i = parent_list(m)
-          un = xyzh(1:3,i) / sqrt(dot_product(xyzh(1:3,i),xyzh(1:3,i)))
-          vxyzu(1:3,i) = vxyzu(1:3,i) + alpha*un
-          xyzh(1:3,i) = xyzh(1:3,i) + pos_com(:)
-       enddo
+       vxyzu(4,eldest) = vxyzu(4,eldest) - delta_ekin
+       if (vxyzu(4,eldest) < 0.) vxyzu(4,eldest) = 0.
 
     endif
 
  enddo over_cells
  !$omp end parallel do
-
- deallocate(cells_com,apri_at_cells_com)
 
 end subroutine merge_with_special_tree
 
