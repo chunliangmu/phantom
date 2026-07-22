@@ -424,7 +424,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
        ! Now send them to be merged
        if (nmerge > 11) call merge_with_special_tree(nmerge,idx_merge,xyzh_merge(:,1:nmerge),&
                                             vxyzu_merge(:,1:nmerge),kk,xyzh,vxyzu,apr_level,nkilled,&
-                                            nrelax,relaxlist,npartnew,entropy_list,entropy_count,entropy_stored,icentre)
+                                            nrelax,relaxlist,npartnew,entropy_list,entropy_count,entropy_stored)
        nmerge_total = nmerge_total + nkilled ! actually merged
        if (apr_verbose) then
           print*,'merged: ',nkilled,kk
@@ -501,7 +501,7 @@ end subroutine splitpart
 !-----------------------------------------------------------------------
 subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,current_apr,&
                                      xyzh,vxyzu,apr_level,nkilled,nrelax,relaxlist,npartnew,&
-                                     entropy_list,entropy_count,entropy_stored,icentre)
+                                     entropy_list,entropy_count,entropy_stored)
  use neighkdtree,   only:build_tree,ncells,leaf_is_active,get_cell_location
  use mpiforce,      only:cellforce
  use kdtree,        only:inodeparts,inoderange
@@ -516,7 +516,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew,entropy_count
  integer(kind=8), intent(inout) :: entropy_list(:)
  integer(kind=1), intent(inout) :: apr_level(:)
- integer,         intent(in)    :: current_apr,mergelist(:),icentre
+ integer,         intent(in)    :: current_apr,mergelist(:)
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
  integer :: remainder,icell,n_cell,apri,m,i,ierr,k,already_stored,localtmp
@@ -541,12 +541,76 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  call build_tree(nmerge,nmerge,xyzh_merge(:,1:nmerge),vxyzu_merge(:,1:nmerge),&
                       for_apr=.true.)
 
+ allocate(cells_com(3,ncells),apri_at_cells_com(ncells))
+ apri_at_cells_com = 0
+
+ spherical = .false.
+ ! get the center of the cell
+ !$omp parallel do default(none) schedule(dynamic) &
+ !$omp shared(ncells,leaf_is_active,inoderange,inodeparts,spherical) &
+ !$omp shared(xyzh_merge,apr_centre,icentre,cells_com) &
+ !$omp private(icell,n_cell,com,m,i) &
+ !$omp private(cell,r_ave,theta_ave,phi_ave,r_part,phi_part,xyzh_fromicentre)
+ over_cells_part0: do icell=1,int(ncells)
+    if (leaf_is_active(icell) == 0) cycle over_cells_part0 !--skip empty cells
+    n_cell = inoderange(2,icell)-inoderange(1,icell)+1
+
+    com = 0.
+    if (.not.spherical) then
+       ! if not using spherical coordinates to check the cell location, just use existing info
+       call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
+       com(1:3) = cell%xpos(1:3)
+    else
+       ! if spherical chosen, calculated the com in spherical coordinates and check
+       ! if that is within the boundary or not (convert back to cartesian com later on)
+       r_ave = 0.
+       theta_ave = 0.
+       phi_ave = 0.
+       ! spherically average the position of the particles around the current APR region
+       do m = 1,n_cell
+          i = inodeparts(inoderange(1,icell) + m - 1)
+          xyzh_fromicentre(1:3) = xyzh_merge(1:3,i) - apr_centre(1:3,icentre)
+          !print*,i,xyzh_merge(1:3,i)
+          r_part = sqrt(dot_product(xyzh_fromicentre(1:3),xyzh_fromicentre(1:3)))
+          r_ave = r_ave + r_part
+          theta_ave = theta_ave + acos(xyzh_fromicentre(3)/r_part)
+          phi_part = atan2(xyzh_fromicentre(2),xyzh_fromicentre(1))
+          !if (phi_ave < 0.) phi_ave = phi_ave + 2.*pi
+          phi_ave = phi_ave + phi_part
+       enddo
+       r_ave = r_ave/real(n_cell)
+       theta_ave = theta_ave/real(n_cell)
+       phi_ave = phi_ave/real(n_cell)
+
+       ! now convert back to cartesian equivalents
+       com(1) = r_ave*sin(theta_ave)*cos(phi_ave)
+       com(2) = r_ave*sin(theta_ave)*sin(phi_ave)
+       com(3) = r_ave*cos(theta_ave)
+       com(:) = com(:) + apr_centre(1:3,icentre) ! for sending back into get_apr
+    endif
+    cells_com(:,icell) = com
+ enddo over_cells_part0
+ !$omp end parallel do
+
+ ! not sure how to parallelize this, so I am just gonna run it separately
+ over_cells_part1: do icell=1,int(ncells)
+    if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
+    n_cell = inoderange(2,icell)-inoderange(1,icell)+1
+
+    call get_apr(cells_com(1:3,icell),icentre,apri)
+    apri_at_cells_com(icell) = apri
+    do m = 1,n_cell
+       i = inodeparts(inoderange(1,icell) + m - 1)
+       call get_apr(xyzh_merge(1:3,i),icentre,apri)
+       if (apri_at_cells_com(icell) < apri) apri_at_cells_com(icell) = apri
+    enddo
+ enddo over_cells_part1
 
  ! Now use the centre of mass of each cell to check whether it should
  ! be merged or not
  !$omp parallel do default(none) schedule(dynamic) &
  !$omp shared(xyzh,vxyzu,iorig,ncells,leaf_is_active,inoderange,inodeparts,get_apr) &
- !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist,icentre) &
+ !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist) &
  !$omp shared(apr_centre,current_apr,aprmassoftype,mergelist,eos_vars,gamma) &
  !$omp shared(apr_level,xyzh_merge,vxyzu_merge,entropy_count,entropy_list,entropy_stored) &
  !$omp private(icell,n_cell,i,m,n,u,v,w,vec_a,vec_b,vec_c,test_a,test_b,test_c,testp,testpp,ierr) &
@@ -561,17 +625,12 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
     if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
     n_cell = inoderange(2,icell)-inoderange(1,icell)+1
 
-    apri = 0
-    do m = 1,n_cell
-       i = inodeparts(inoderange(1,icell) + m - 1)
-       call get_apr(xyzh(1:3,i),icentre,n)
-       if (apri < n) apri = n
-    enddo
+    apri = apri_at_cells_com(icell)
 
     ! If the apr level based on the com is lower than the current level,
     ! we merge!
     if (apri < current_apr) then
-       ! here we take 12 particles from each leaf in the tree and combine these into six new particles
+       ! here we take 2 particles from each leaf in the tree and combine these into 1 new particles
        ! the new particles are constructed to conserve the average properties of the children
 
        pmassi = aprmassoftype(igas,apr_level(inodeparts(inoderange(1,icell)))) ! this *current* mass is correct
@@ -642,13 +701,15 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
        ekin = 0.5 * pmassi * dot_product(vxyzu(1:3,eldest),vxyzu(1:3,eldest))
        ! and the difference between original and current is (what we need to match)
        delta_ekin = ekin - ogen
-       vxyzu(4,eldest) = vxyzu(4,eldest) - delta_ekin
+       vxyzu(4,eldest) = vxyzu(4,eldest) - delta_ekin / pmassi
        if (vxyzu(4,eldest) < 0.) vxyzu(4,eldest) = 0.
 
     endif
 
  enddo over_cells
  !$omp end parallel do
+
+ deallocate(cells_com,apri_at_cells_com)
 
 end subroutine merge_with_special_tree
 

@@ -81,7 +81,6 @@ end subroutine set_get_apr
 !+
 !-----------------------------------------------------------------------
 pure subroutine get_apr_sphere(pos,icentre,apri)
- use io, only:fatal
  use apr_region, only:apr_region_is_circle
  real,    intent(in)  :: pos(3)
  integer, intent(in)  :: icentre
