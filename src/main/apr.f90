@@ -28,7 +28,7 @@ module apr
  public :: use_apr
 
  private
- real    :: sep_factor = 0.2
+ real    :: sep_factor = 0.30526943307080756
  logical :: apr_verbose = .false.
  logical :: do_relax = .false.
  logical :: adjusted_split = .true.
@@ -541,63 +541,16 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  call build_tree(nmerge,nmerge,xyzh_merge(:,1:nmerge),vxyzu_merge(:,1:nmerge),&
                       for_apr=.true.)
 
- allocate(cells_com(3,ncells),apri_at_cells_com(ncells))
+ allocate(apri_at_cells_com(ncells))
  apri_at_cells_com = 0
-
- spherical = .false.
- ! get the center of the cell
- !$omp parallel do default(none) schedule(dynamic) &
- !$omp shared(ncells,leaf_is_active,inoderange,inodeparts,spherical) &
- !$omp shared(xyzh_merge,apr_centre,icentre,cells_com) &
- !$omp private(icell,n_cell,com,m,i) &
- !$omp private(cell,r_ave,theta_ave,phi_ave,r_part,phi_part,xyzh_fromicentre)
- over_cells_part0: do icell=1,int(ncells)
-    if (leaf_is_active(icell) == 0) cycle over_cells_part0 !--skip empty cells
-    n_cell = inoderange(2,icell)-inoderange(1,icell)+1
-
-    com = 0.
-    if (.not.spherical) then
-       ! if not using spherical coordinates to check the cell location, just use existing info
-       call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
-       com(1:3) = cell%xpos(1:3)
-    else
-       ! if spherical chosen, calculated the com in spherical coordinates and check
-       ! if that is within the boundary or not (convert back to cartesian com later on)
-       r_ave = 0.
-       theta_ave = 0.
-       phi_ave = 0.
-       ! spherically average the position of the particles around the current APR region
-       do m = 1,n_cell
-          i = inodeparts(inoderange(1,icell) + m - 1)
-          xyzh_fromicentre(1:3) = xyzh_merge(1:3,i) - apr_centre(1:3,icentre)
-          !print*,i,xyzh_merge(1:3,i)
-          r_part = sqrt(dot_product(xyzh_fromicentre(1:3),xyzh_fromicentre(1:3)))
-          r_ave = r_ave + r_part
-          theta_ave = theta_ave + acos(xyzh_fromicentre(3)/r_part)
-          phi_part = atan2(xyzh_fromicentre(2),xyzh_fromicentre(1))
-          !if (phi_ave < 0.) phi_ave = phi_ave + 2.*pi
-          phi_ave = phi_ave + phi_part
-       enddo
-       r_ave = r_ave/real(n_cell)
-       theta_ave = theta_ave/real(n_cell)
-       phi_ave = phi_ave/real(n_cell)
-
-       ! now convert back to cartesian equivalents
-       com(1) = r_ave*sin(theta_ave)*cos(phi_ave)
-       com(2) = r_ave*sin(theta_ave)*sin(phi_ave)
-       com(3) = r_ave*cos(theta_ave)
-       com(:) = com(:) + apr_centre(1:3,icentre) ! for sending back into get_apr
-    endif
-    cells_com(:,icell) = com
- enddo over_cells_part0
- !$omp end parallel do
 
  ! not sure how to parallelize this, so I am just gonna run it separately
  over_cells_part1: do icell=1,int(ncells)
     if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
     n_cell = inoderange(2,icell)-inoderange(1,icell)+1
 
-    call get_apr(cells_com(1:3,icell),icentre,apri)
+    call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
+    call get_apr(cell%xpos(1:3),icentre,apri)
     apri_at_cells_com(icell) = apri
     do m = 1,n_cell
        i = inodeparts(inoderange(1,icell) + m - 1)
@@ -709,7 +662,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  enddo over_cells
  !$omp end parallel do
 
- deallocate(cells_com,apri_at_cells_com)
+ deallocate(apri_at_cells_com)
 
 end subroutine merge_with_special_tree
 
