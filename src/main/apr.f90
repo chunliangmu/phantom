@@ -222,132 +222,132 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
  if (apr_verbose) print*,'started splitting'
 
- do jj = 1,apr_max-1
-    do ll = 1,ntrack ! for multiple regions
-       icentre = ll
-       npartold = npartnew ! to account for new particles as they are being made
-       should_split(:) = 0 ! reset
-       rneighs(:) = 0.
-       idx_split(:) = 0
-       n_to_split = 0
+!  do jj = 1,apr_max-1
+!     do ll = 1,ntrack ! for multiple regions
+!        icentre = ll
+!        npartold = npartnew ! to account for new particles as they are being made
+!        should_split(:) = 0 ! reset
+!        rneighs(:) = 0.
+!        idx_split(:) = 0
+!        n_to_split = 0
 
-       !$omp parallel default(none) &
-       !$omp shared(npartold,iphase,apr_level,xyzh,should_split,get_apr,icentre) &
-       !$omp shared(idx_split) &
-       !$omp private(ii,get_apr_in,apri) &
-       !$omp reduction(+:nsplit_total,n_to_split) reduction(max:apr_last)
-       !$omp do
-       split_over_active: do ii = 1,npartold
-          ! only do this on active particles
-          if (ind_timesteps) then
-             if (.not.iactive(iphase(ii))) cycle split_over_active
-          endif
+!        !$omp parallel default(none) &
+!        !$omp shared(npartold,iphase,apr_level,xyzh,should_split,get_apr,icentre) &
+!        !$omp shared(idx_split) &
+!        !$omp private(ii,get_apr_in,apri) &
+!        !$omp reduction(+:nsplit_total,n_to_split) reduction(max:apr_last)
+!        !$omp do
+!        split_over_active: do ii = 1,npartold
+!           ! only do this on active particles
+!           if (ind_timesteps) then
+!              if (.not.iactive(iphase(ii))) cycle split_over_active
+!           endif
 
-          get_apr_in(1:3) = xyzh(1:3,ii)
-          ! this is the refinement level it *should* have based
-          ! on it's current position
-          call get_apr(get_apr_in,icentre,apri)
-          ! if the level it should have is greater than the
-          ! level it does have, increment it up one
-          if (apri > apr_level(ii)) then
-             should_split(ii) = 1 ! record that this should be split
-             nsplit_total = nsplit_total + 1
-             n_to_split = n_to_split + 1
-             apr_last = apri
-          endif
-       enddo split_over_active
-       !$omp enddo
-       !$omp end parallel
+!           get_apr_in(1:3) = xyzh(1:3,ii)
+!           ! this is the refinement level it *should* have based
+!           ! on it's current position
+!           call get_apr(get_apr_in,icentre,apri)
+!           ! if the level it should have is greater than the
+!           ! level it does have, increment it up one
+!           if (apri > apr_level(ii)) then
+!              should_split(ii) = 1 ! record that this should be split
+!              nsplit_total = nsplit_total + 1
+!              n_to_split = n_to_split + 1
+!              apr_last = apri
+!           endif
+!        enddo split_over_active
+!        !$omp enddo
+!        !$omp end parallel
 
-       ! reallocate if required; if this happens even once just use the biggest possible
-       if (n_to_split > size(scan_array)) then
-          deallocate(scan_array,rneighs,idx_split)
-          allocate(scan_array(maxp),rneighs(maxp),idx_split(maxp))
-       endif
+!        ! reallocate if required; if this happens even once just use the biggest possible
+!        if (n_to_split > size(scan_array)) then
+!           deallocate(scan_array,rneighs,idx_split)
+!           allocate(scan_array(maxp),rneighs(maxp),idx_split(maxp))
+!        endif
 
-       ! create the scan array - this loop should *not* be parallelised
-       scan_array(:) = 0
-       do ii = 2,npartold
-          scan_array(ii) = scan_array(ii-1) + should_split(ii-1)
-       enddo
+!        ! create the scan array - this loop should *not* be parallelised
+!        scan_array(:) = 0
+!        do ii = 2,npartold
+!           scan_array(ii) = scan_array(ii-1) + should_split(ii-1)
+!        enddo
 
-       ! make the particle list
-       idx_len = n_to_split
-       npartnew = npartnew + idx_len ! total number of particles (for now)
-       npartoftype(igas) = npartoftype(igas) + n_to_split ! add to npartoftype
-       npart = npartnew ! for splitpart
+!        ! make the particle list
+!        idx_len = n_to_split
+!        npartnew = npartnew + idx_len ! total number of particles (for now)
+!        npartoftype(igas) = npartoftype(igas) + n_to_split ! add to npartoftype
+!        npart = npartnew ! for splitpart
 
-       ! exit here if there's nothing more to do
-       if (n_to_split == 0) cycle
+!        ! exit here if there's nothing more to do
+!        if (n_to_split == 0) cycle
 
-       !$omp parallel default(none) &
-       !$omp shared(npartold,should_split,idx_split,scan_array,idx_len) &
-       !$omp shared(rneighs,xyzh,adjusted_split) &
-       !$omp private(ii,mm,rmin_local,j,xi,yi,zi,dx,dy,dz)
-       !$omp do
-       do ii = 1,npartold
-          if (should_split(ii) == 1) then
-             idx_split(scan_array(ii) + 1) = ii
-          endif
-       enddo
-       !$omp enddo
+!        !$omp parallel default(none) &
+!        !$omp shared(npartold,should_split,idx_split,scan_array,idx_len) &
+!        !$omp shared(rneighs,xyzh,adjusted_split) &
+!        !$omp private(ii,mm,rmin_local,j,xi,yi,zi,dx,dy,dz)
+!        !$omp do
+!        do ii = 1,npartold
+!           if (should_split(ii) == 1) then
+!              idx_split(scan_array(ii) + 1) = ii
+!           endif
+!        enddo
+!        !$omp enddo
 
-       if (adjusted_split) then
-          !$omp do schedule(dynamic)
-          do ii = 1,idx_len
-             mm = idx_split(ii) ! original particle that should be split
-             xi = xyzh(1,mm)
-             yi = xyzh(2,mm)
-             zi = xyzh(3,mm)
+!        if (adjusted_split) then
+!           !$omp do schedule(dynamic)
+!           do ii = 1,idx_len
+!              mm = idx_split(ii) ! original particle that should be split
+!              xi = xyzh(1,mm)
+!              yi = xyzh(2,mm)
+!              zi = xyzh(3,mm)
 
-             rmin_local = huge(1.0)
+!              rmin_local = huge(1.0)
 
-             do j = 1,npartold
-                if (j == mm) cycle
-                dx = xi - xyzh(1,j)
-                dy = yi - xyzh(2,j)
-                dz = zi - xyzh(3,j)
-                rmin_local = min(rmin_local,dx*dx + dy*dy + dz*dz)
-             enddo
-             rneighs(ii) = sqrt(rmin_local)
-          enddo
-          !$omp enddo
-       endif
-       !$omp end parallel
+!              do j = 1,npartold
+!                 if (j == mm) cycle
+!                 dx = xi - xyzh(1,j)
+!                 dy = yi - xyzh(2,j)
+!                 dz = zi - xyzh(3,j)
+!                 rmin_local = min(rmin_local,dx*dx + dy*dy + dz*dz)
+!              enddo
+!              rneighs(ii) = sqrt(rmin_local)
+!           enddo
+!           !$omp enddo
+!        endif
+!        !$omp end parallel
 
-       ! if relaxing, make some adjustments here:
-       ! just use the first particle that has been marked to split
-       ! to establish if we should be relaxing at all
-       relax_in_loop = (do_relax .and. (gr .or. apr_last == top_level))
+!        ! if relaxing, make some adjustments here:
+!        ! just use the first particle that has been marked to split
+!        ! to establish if we should be relaxing at all
+!        relax_in_loop = (do_relax .and. (gr .or. apr_last == top_level))
 
-       ! now go through and actually split them - this should *probably* not be parallelised
-       ! due to the content of the nested functions, idx_len probably isn't that long either
-       do ii = 1,idx_len
-          mm = idx_split(ii) ! original particle that should be split
-          kk = npartold + ii ! location in array for new particle
-          pmassi = aprmassoftype(igas,apr_level(mm))
-          P_i = eos_vars(igasP,mm)
-          rhoi = rhoh(xyzh(4,mm),pmassi)
-          ientropy = pmassi*(P_i*rhoi**(-gamma))
-          if (adjusted_split) then
-             call splitpart(mm,kk,rneigh=rneighs(ii))
-          else
-             call splitpart(mm,kk)
-          endif
-          if (relax_in_loop) then
-             relaxlist(nrelax + ii) = mm
-             relaxlist(nrelax + n_to_split + ii) = kk
-          endif
-         !  entropy_count = entropy_count + 2
-         !  entropy_stored(entropy_count - 1:entropy_count) = 0.5*ientropy ! because we share it across both evenly
-         !  entropy_list(entropy_count - 1) = iorig(mm)
-         !  entropy_list(entropy_count) = iorig(kk)
-       enddo
+!        ! now go through and actually split them - this should *probably* not be parallelised
+!        ! due to the content of the nested functions, idx_len probably isn't that long either
+!        do ii = 1,idx_len
+!           mm = idx_split(ii) ! original particle that should be split
+!           kk = npartold + ii ! location in array for new particle
+!           pmassi = aprmassoftype(igas,apr_level(mm))
+!           P_i = eos_vars(igasP,mm)
+!           rhoi = rhoh(xyzh(4,mm),pmassi)
+!           ientropy = pmassi*(P_i*rhoi**(-gamma))
+!           if (adjusted_split) then
+!              call splitpart(mm,kk,rneigh=rneighs(ii))
+!           else
+!              call splitpart(mm,kk)
+!           endif
+!           if (relax_in_loop) then
+!              relaxlist(nrelax + ii) = mm
+!              relaxlist(nrelax + n_to_split + ii) = kk
+!           endif
+!          !  entropy_count = entropy_count + 2
+!          !  entropy_stored(entropy_count - 1:entropy_count) = 0.5*ientropy ! because we share it across both evenly
+!          !  entropy_list(entropy_count - 1) = iorig(mm)
+!          !  entropy_list(entropy_count) = iorig(kk)
+!        enddo
 
-       ! if relaxing, update the total number that will be relaxed
-       if (relax_in_loop) nrelax = nrelax + 2*n_to_split
-    enddo
- enddo
+!        ! if relaxing, update the total number that will be relaxed
+!        if (relax_in_loop) nrelax = nrelax + 2*n_to_split
+!     enddo
+!  enddo
 
  ! Take into account all the added particles
  npart = npartnew
