@@ -582,7 +582,8 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
 
     ! If the apr level based on the com is lower than the current level,
     ! we merge!
-    if (apri < current_apr) then
+   !  if (apri < current_apr) then
+    if (.false.) then
        ! here we take 2 particles from each leaf in the tree and combine these into 1 new particles
        ! the new particles are constructed to conserve the average properties of the children
 
