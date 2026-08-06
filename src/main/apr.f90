@@ -626,7 +626,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
        ! here we take 12 particles from each leaf in the tree and combine these into six new particles
        ! the new particles are constructed to conserve the average properties of the children
 
-       pmassi = aprmassoftype(igas,apr_level(inodeparts(inoderange(1,icell)))) ! this *current* mass is correct
+       pmassi = aprmassoftype(igas,apr_level(mergelist(inodeparts(inoderange(1,icell))))) ! this *current* mass is correct
        ! because only particles to merge are sent in
 
        ! start by calculating (or using) the average properties of the 12 children
@@ -781,11 +781,12 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           ! book-keeping
           localtmp = nrelax
           if (do_relax) then
-             !$omp atomic capture
+             !$omp critical
+             ! use critical instead of atomic capture here to ensure relaxlist is fully written before the check loop next
              nrelax = nrelax + 1
              localtmp = nrelax
-             !$omp end atomic
              relaxlist(localtmp) = eldest
+             !$omp end critical
           endif
 
           ! If this particle was on the shuffle list previously, take it off
