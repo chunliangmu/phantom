@@ -626,7 +626,7 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
        ! here we take 12 particles from each leaf in the tree and combine these into six new particles
        ! the new particles are constructed to conserve the average properties of the children
 
-       pmassi = aprmassoftype(igas,apr_level(inodeparts(inoderange(1,icell)))) ! this *current* mass is correct
+       pmassi = aprmassoftype(igas,apr_level(mergelist(inodeparts(inoderange(1,icell))))) ! this *current* mass is correct
        ! because only particles to merge are sent in
 
        ! start by calculating (or using) the average properties of the 12 children
@@ -738,8 +738,8 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           tuther = mergelist(inodeparts(inoderange(1,icell) + m + 5)) ! + 5
 
           ! save the entropy - we need this saved for later
-          rho_eldest = rhoh(xyzh(4,eldest),pmassi*0.5) ! I don't know why 0.5 is required here?!
-          rho_tuther = rhoh(xyzh(4,tuther),pmassi*0.5)
+          rho_eldest = rhoh(xyzh(4,eldest),pmassi)
+          rho_tuther = rhoh(xyzh(4,tuther),pmassi)
           P_eldest = eos_vars(igasP,eldest)
           P_tuther = eos_vars(igasP,tuther)
           gammai = gamma
@@ -760,9 +760,9 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
              end if
           enddo
           ! use stored ientropy when possible (instead of recomputing) to ensure entropy conservation
-          if (ientropy_tuther == 0.) ientropy_tuther = ientropy_tuther + 0.5*pmassi*P_tuther*rho_tuther**(-gammai)
+          if (ientropy_tuther == 0.) ientropy_tuther = ientropy_tuther + pmassi*P_tuther*rho_tuther**(-gammai)
           if (already_stored < 0) then
-             entropy_stored(localtmp) = 0.5*pmassi*P_eldest*rho_eldest**(-gammai) + ientropy_tuther
+             entropy_stored(localtmp) = pmassi*P_eldest*rho_eldest**(-gammai) + ientropy_tuther
              entropy_list(localtmp) = iorig(eldest)
           else
              entropy_stored(already_stored) = entropy_stored(already_stored) + ientropy_tuther
