@@ -781,11 +781,12 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           ! book-keeping
           localtmp = nrelax
           if (do_relax) then
-             !$omp atomic capture
+             !$omp critical
+             ! use critical instead of atomic capture here to ensure relaxlist is fully written before the check loop next
              nrelax = nrelax + 1
              localtmp = nrelax
-             !$omp end atomic
              relaxlist(localtmp) = eldest
+             !$omp end critical
           endif
 
           ! If this particle was on the shuffle list previously, take it off
