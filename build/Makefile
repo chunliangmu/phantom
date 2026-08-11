@@ -266,6 +266,7 @@ ifeq ($(SINKTREE), yes)
 endif
 
 ifeq ($(KROME), yes)
+    HDF5 := yes
     FPPFLAGS += -DKROME
     LDFLAGS  += -llapack
 endif
@@ -404,7 +405,7 @@ ifeq (X$(HDF5LIB), X)
 endif
     FFLAGS+= -I$(HDF5INCLUDE)
     CCFLAGS+= -I$(HDF5INCLUDE)
-    LDFLAGS+= -L$(HDF5_DIR)/lib -lhdf5 -lhdf5_fortran
+    LDFLAGS+= -L$(HDF5LIB) -Wl,-rpath,$(HDF5LIB) -lhdf5 -lhdf5_fortran
 endif
 
 IDFLAGS=$(FPPFLAGS)
@@ -633,7 +634,7 @@ libsetup: $(OBJLIBSETUP)
 .PHONY: phantomsetup
 phantomsetup: setup
 
-SRCSETSTAR= prompting.f90 density_profiles.f90 readwrite_kepler.f90 readwrite_mesa.f90 \
+SRCSETSTAR= prompting.f90 density_profiles.f90 readwrite_kepler.f90 readwrite_mesa.f90 readwrite_aton.f90 \
             set_cubic_core.f90 set_fixedentropycore.f90 set_softened_core.f90 \
             set_star_utils.f90 relax_star.f90 set_star.f90 set_orbit.f90
 
@@ -884,7 +885,7 @@ allanalysis:
           analysis_structurefn.f90) \
              analysisfile="utils_timing.f90 io_structurefn.f90 utils_sort.f90 random.f90 struct_part.f90 $$analysisfile"; \
           ;; \
-          analysis_krome.f90|analysis_mcfost.f90) \
+          analysis_krome.F90|analysis_mcfost.f90) \
              continue; \
           ;; \
        esac; \
