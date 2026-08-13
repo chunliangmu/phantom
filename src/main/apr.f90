@@ -415,6 +415,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
              idx_merge(mm) = ii
              xyzh_merge(1:4,mm) = xyzh(1:4,ii)
              vxyzu_merge(1:3,mm) = vxyzu(1:3,ii)
+             if (maxvxyzu > 3) vxyzu_merge(4,mm) = vxyzu(4,ii)
              npart_regions(kk) = npart_regions(kk) + 1
           endif
        enddo
@@ -422,7 +423,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
        if (apr_verbose) print*,nmerge,'particles selected for merge'
        ! Now send them to be merged
-       if (nmerge > 11) call merge_with_special_tree(nmerge,idx_merge,xyzh_merge(:,1:nmerge),&
+       if (nmerge >= 4) call merge_with_special_tree(nmerge,idx_merge,xyzh_merge(:,1:nmerge),&
                                             vxyzu_merge(:,1:nmerge),kk,xyzh,vxyzu,apr_level,nkilled,&
                                             nrelax,relaxlist,npartnew,entropy_list,entropy_count,entropy_stored)
        nmerge_total = nmerge_total + nkilled ! actually merged
@@ -505,37 +506,29 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  use neighkdtree,   only:build_tree,ncells,leaf_is_active,get_cell_location
  use mpiforce,      only:cellforce
  use kdtree,        only:inodeparts,inoderange
- use part,          only:kill_particle,igas,igasP,igamma,eos_vars,rhoh
- use part,          only:combine_two_particles,aprmassoftype,iorig
- use dim,           only:ind_timesteps,maxvxyzu
+ use part,          only:combine_two_particles
+ use dim,           only:ind_timesteps
+ use io,            only:fatal,warning
  use get_apr_level, only:get_apr,put_in_smallest_bin
- use physcon,       only:pi
- use utils_apr,     only:apr_centre
- use vectorutils, only:cross_product3D,matrixinvert3D
- use eos,           only:gamma
+ use sortutils,    only:indexx
+ use vectorutils,   only:cross_product3D
  integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew,entropy_count
  integer(kind=8), intent(inout) :: entropy_list(:)
  integer(kind=1), intent(inout) :: apr_level(:)
  integer,         intent(in)    :: current_apr,mergelist(:)
  real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
- integer :: remainder,icell,n_cell,apri,m,i,ierr,k,already_stored,localtmp
- integer :: eldest,tuther,testp,testpp,n,child_list(12),parent_list(6)
+ integer :: remainder,icell,n_cell,apri,m,i,j,k,n,localtmp,ia,ib,ic,id
+ integer :: keep1,keep2,kill1,kill2,child_list(12),closest(4)
  integer,         allocatable :: apri_at_cells_com(:)
- real,            allocatable :: cells_com(:,:)
- real    :: com(3),pmassi,xyzh_fromicentre(3)
- real    :: r_ave,phi_ave,theta_ave,r_part,phi_part,ekin
- real    :: pos_com(3),vel_com(3),am(3),ogen,ogam(3),am_term(3)
- real    :: Q(3,3),pdash,qdash,det,phi,lamb(3),es(3,3),sum_temp,s_min,S,dist(3),inv_iner(3,3)
- real    :: test_a,test_b,test_c,vec_a(3),vec_b(3),vec_c(3),u(3),v(3),w(3)
- real    :: lm(3),iner(3,3),lm_ave(3),term(3),omega(3),delta_ekin
- real    :: alpha,alpha1,alpha2,discriminant,A,B,C,un(3)
- real    :: ientropy_tuther, rho_eldest, rho_tuther, P_eldest, P_tuther, gammai
- logical :: spherical
+ real    :: am2,ekin,rl2,r_sep,vperp,vpar,sv,slen
+ real    :: pos_com(3),vel_com(3),am(3),am_hat(3),am_term(3)
+ real    :: vec(3),tvec(3),v_rel(3),r_rel(3)
+ real    :: ppos(4,3),svec(3),svec_best(3),d2(4)
  type(cellforce)        :: cell
 
- ! First ensure that we're only sending in groups of 2 to the tree
- remainder = modulo(nmerge,2)
+ ! First ensure that we're only sending in groups of 4 to the tree
+ remainder = modulo(nmerge,4)
  nmerge = nmerge - remainder
 
  call build_tree(nmerge,nmerge,xyzh_merge(:,1:nmerge),vxyzu_merge(:,1:nmerge),&
@@ -544,14 +537,19 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  allocate(apri_at_cells_com(ncells))
  apri_at_cells_com = 0
 
- ! not sure how to parallelize this, so I am just gonna run it separately
+ ! Get the apr level at the centre of mass of each leaf
+ ! The group is merged once its com has crossed the boundary
  over_cells_part1: do icell=1,int(ncells)
     if (leaf_is_active(icell) == 0) cycle over_cells_part1 !--skip empty cells
     n_cell = inoderange(2,icell)-inoderange(1,icell)+1
-
     call get_cell_location(icell,cell%xpos,cell%xsizei,cell%rcuti)
-    call get_apr(cell%xpos(1:3),icentre,apri)
+    pos_com = cell%xpos
+    call get_apr(pos_com,icentre,apri)
     apri_at_cells_com(icell) = apri
+    if (apri >= current_apr) cycle over_cells_part1
+
+    ! make sure all particles-to-merge have crossed the boundary
+    ! to make sure new children particles do NOT spawn in the finer side and immediately got split again
     do m = 1,n_cell
        i = inodeparts(inoderange(1,icell) + m - 1)
        call get_apr(xyzh_merge(1:3,i),icentre,apri)
@@ -562,17 +560,15 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  ! Now use the centre of mass of each cell to check whether it should
  ! be merged or not
  !$omp parallel do default(none) schedule(dynamic) &
- !$omp shared(xyzh,vxyzu,iorig,ncells,leaf_is_active,inoderange,inodeparts,get_apr) &
- !$omp shared(cells_com,apri_at_cells_com,do_relax,nrelax,relaxlist) &
- !$omp shared(apr_centre,current_apr,aprmassoftype,mergelist,eos_vars,gamma) &
- !$omp shared(apr_level,xyzh_merge,vxyzu_merge,entropy_count,entropy_list,entropy_stored) &
- !$omp private(icell,n_cell,i,m,n,u,v,w,vec_a,vec_b,vec_c,test_a,test_b,test_c,testp,testpp,ierr) &
- !$omp private(pos_com,vel_com,am,am_term,lm,lm_ave,ekin,delta_ekin,dist,child_list) &
- !$omp private(apri,pmassi,ogen,ogam,Q,pdash,qdash,det,phi,lamb,es,un,iner,inv_iner,omega) &
- !$omp private(r_part,sum_temp,s_min,S,gammai,parent_list,already_stored,localtmp,term) &
- !$omp private(A,B,C,discriminant,alpha,alpha1,alpha2) &
- !$omp private(eldest,rho_eldest,P_eldest) &
- !$omp private(tuther,rho_tuther,P_tuther,ientropy_tuther) &
+ !$omp shared(xyzh,vxyzu,ncells,leaf_is_active,inoderange,inodeparts) &
+ !$omp shared(apri_at_cells_com,do_relax,nrelax,relaxlist) &
+ !$omp shared(current_apr,mergelist,apr_level) &
+ !$omp shared(xyzh_merge,vxyzu_merge,get_apr,icentre) &
+ !$omp private(icell,n_cell,i,m,j,k,n,apri,localtmp,ia,ib,ic,id) &
+ !$omp private(keep1,keep2,kill1,kill2,child_list,closest) &
+ !$omp private(pos_com,vel_com,am,am_hat,am_term,am2,ekin) &
+ !$omp private(vec,tvec,v_rel,r_rel) &
+ !$omp private(ppos,svec,svec_best,d2,slen,rl2,r_sep,vperp,vpar,sv) &
  !$omp reduction(+:nkilled)
  over_cells: do icell=1,int(ncells)
     if (leaf_is_active(icell) == 0) cycle over_cells !--skip empty cells
@@ -583,80 +579,186 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
     ! If the apr level based on the com is lower than the current level,
     ! we merge!
     if (apri < current_apr) then
-       ! here we take 2 particles from each leaf in the tree and combine these into 1 new particles
+       ! here we take the 4 particles in each leaf of the tree and combine these into 2 new particles,
        ! the new particles are constructed to conserve the average properties of the children
 
-       pmassi = aprmassoftype(igas,apr_level(mergelist(inodeparts(inoderange(1,icell))))) ! this *current* mass is correct
-       ! because only particles to merge are sent in
+       ! the kdtree is built so that every leaf holds exactly 4 particles;
+       ! skip anything else (should not happen) rather than crash
+       if (n_cell /= 4) call fatal('merge_with_special_tree','Unexpected n_cell: should be 4, received ',var='n_cell',ival=n_cell)
 
-       ! start by calculating (or using) the average properties of the 12 children
+       !  pmassi = aprmassoftype(igas,apr_level(mergelist(inodeparts(inoderange(1,icell))))) ! this *current* mass is correct
+       !  ! because only particles to merge are sent in
+
+       ! start by calculating the average properties of the 4 children
        pos_com = 0.
        vel_com(:) = 0.
-       am(:) = 0.
-       lm(:) = 0.
-       i = inodeparts(inoderange(1,icell))
-       ekin = 0.
        do m = 1,n_cell
           i = inodeparts(inoderange(1,icell) + m - 1)
           child_list(m) = i ! save these for later
           vel_com(:) = vel_com(:) + vxyzu_merge(1:3,i)
           pos_com(:) = pos_com(:) + xyzh_merge(1:3,i)
-          ekin = ekin + 0.5*pmassi*(vxyzu_merge(1,i)**2 &
-                 + vxyzu_merge(2,i)**2 + vxyzu_merge(3,i)**2)
-          lm(:) = lm(:) + pmassi*vxyzu_merge(1:3,i)
        enddo
-
        vel_com(:) = vel_com(:)/real(n_cell)
        pos_com(:) = pos_com(:)/real(n_cell)
-       ogen = ekin
-       lm_ave(:) = lm(:)/(n_cell*pmassi)
 
-      !  ! adjust the particle positions to the com frame
-      !  do m = 1,n_cell
-      !     i = inodeparts(inoderange(1,icell) + m - 1)
-      !     xyzh_merge(1:3,i) = xyzh_merge(1:3,i) - pos_com(1:3)
-      !  enddo
+       ! everything from here on is in the centre of mass reference frame of the group:
+       ! am = angular momentum about the com (per unit mass)
+       ! ekin = kinetic energy in the com frame (per unit mass)
+       am(:) = 0.
+       ekin = 0.
+       do m = 1,n_cell
+          i = child_list(m)
+          r_rel(1:3) = xyzh_merge(1:3,i) - pos_com(1:3)
+          v_rel(1:3) = vxyzu_merge(1:3,i) - vel_com(1:3)
+          call cross_product3D(r_rel,v_rel,am_term)
+          am(:) = am(:) + am_term(:)
+          ekin = ekin + 0.5*dot_product(v_rel,v_rel)
+       enddo
 
-       ! merge the first six particles with the last six particles
+       ! the 2 new particles must lie on a plane perpendicular to the total angular momentum of the group,
+       ! so the pair axis is restricted to that plane;
+       ! choose the axis and separation that
+       ! minimise the sum of the squared distances between each new particle and the 2 parents it inherits from:
+       !   D^2 = |r_1-p_a|^2 + |r_1-p_b|^2 + |r_2-p_c|^2 + |r_2-p_d|^2
+       ! with r_2 = -r_1 in the com frame.
+       ! For a fixed pairing {a,b},{c,d}:
+       !   D^2 = 4*r^2 + sum_i|p_i|^2 - 4*r*|P(p_a+p_b)|
+       ! where P projects onto the plane perpendicular to L,
+       ! which is minimised at r = |P(p_a+p_b)|/2,
+       ! i.e. each child sits at the projection of its own pair's centre of mass onto that plane.
+       ! The best pairing is the one with the longest projected pair-sum.
+       am2 = dot_product(am,am)
+       if (am2 > 0.) then
+          am_hat(:) = am(:)/sqrt(am2)
+       endif
 
-       eldest = mergelist(inodeparts(inoderange(1,icell))) ! remember we're running off the mergelist
-       tuther = mergelist(inodeparts(inoderange(1,icell) + 1)) ! + 5
+       ! parent positions in the com frame
+       do m = 1,n_cell
+          i = child_list(m)
+          ppos(m,1:3) = xyzh_merge(1:3,i) - pos_com(1:3)
+       enddo
 
-       ! discard tuther ("the other")
-       ! Note: combine_two_particles calls kill_particle, which is not thread safe
-       ! Remedied by adding omp critical keyword to kill_particle subroutine
-       call combine_two_particles(eldest,tuther)
-       apr_level(eldest) = apr_level(eldest) - int(1,kind=1)
-       xyzh(4,eldest) = (xyzh(4,eldest))*(2.0**(1./3.)) ! rescale for its new mass
-       if (ind_timesteps) call put_in_smallest_bin(eldest)
- 
+       ! try each of the 3 pairings of the 4 parents, keeping the one with
+       ! the longest projected pair-sum
+       slen = 0.
+       svec_best(:) = 0.
+       do n = 1,3
+          select case(n)
+          case(1)
+             ia = 1; ib = 2; ic = 3; id = 4
+          case(2)
+             ia = 1; ib = 3; ic = 2; id = 4
+          case(3)
+             ia = 1; ib = 4; ic = 2; id = 3
+          end select
+          svec(1:3) = ppos(ia,1:3) + ppos(ib,1:3)
+          if (am2 > 0.) svec(:) = svec(:) - dot_product(svec,am_hat)*am_hat(:)
+          if (dot_product(svec,svec) > slen) then
+             slen = dot_product(svec,svec)
+             svec_best(1:3) = svec(1:3)
+          endif
+       enddo
+
+       ! separation of the pair: half the projected pair-sum
+       ! (children at the projection of their parents' centre of mass),
+       ! but not smaller than the value required
+       ! for the tangential velocities (implied by angular momentum conservation) to be real
+       rl2 = 0.
+       if (ekin > tiny(ekin)) rl2 = am2/(8.*ekin)
+       if (slen > tiny(slen)) then
+          vec(1:3) = svec_best(1:3)/sqrt(slen)
+          r_sep = max(0.5*sqrt(slen),sqrt(rl2))
+       else
+          call warning('merge_with_special_tree','all 4 particles-to-merge seem to be lumped together')
+          vec(1:3) = 0.
+          r_sep = 0.
+       endif
+
+
+       ! do not merge if the resulting pair would straddle the apr boundary,
+       ! as the outside member would simply be re-split on the next step (merge -> re-split churn);
+       ! the group is left until it has fully crossed over
+       call get_apr(pos_com(1:3) + r_sep*vec(1:3),icentre,apri)
+       if (apri >= current_apr) cycle over_cells
+       call get_apr(pos_com(1:3) - r_sep*vec(1:3),icentre,apri)
+       if (apri >= current_apr) cycle over_cells
+
+       ! relative velocity of the pair:
+       ! the tangential component is fixed by angular momentum conservation (|am| = 4*r*v_tangential per unit mass),
+       ! and the radial component by kinetic energy conservation,
+       ! with its sign chosen to match the mean radial motion of the old group
+       vperp = 0.
+       if (r_sep > tiny(r_sep)) vperp = sqrt(am2)/(4.*r_sep)
+       vpar = sqrt(max(0.,0.5*ekin - vperp*vperp))
+       sv = 0.
+       do m = 1,n_cell
+          i = child_list(m)
+          sv = sv + dot_product(vxyzu_merge(1:3,i) - vel_com(1:3),vec(1:3))
+       enddo
+       if (sv < 0.) vpar = -vpar
+       v_rel(:) = vpar*vec(:)
+       if (am2 > 0.) then
+          call cross_product3D(am_hat,vec,tvec) ! tangential direction in the plane
+          v_rel(:) = v_rel(:) + vperp*tvec(:)
+       endif
+
+       ! the pair configuration must be finite (catches NaN in the input)
+       if (isnan(r_sep) .or. isnan(vperp) .or. isnan(vpar) .or. &
+           isnan(vec(1)) .or. isnan(vec(2)) .or. isnan(vec(3))) &
+          call fatal('merge_with_special_tree','non-finite pair configuration in merge')
+
+       ! each child inherits the properties of the 2 parents closest to it
+       do m = 1,n_cell
+          i = child_list(m)
+          d2(m) = dot_product(ppos(m,1:3) - r_sep*vec(1:3),ppos(m,1:3) - r_sep*vec(1:3))
+       enddo
+       call indexx(n_cell,d2(1:n_cell),closest(1:n_cell))
+
+       keep1 = mergelist(inodeparts(inoderange(1,icell) + closest(1) - 1))
+       kill1 = mergelist(inodeparts(inoderange(1,icell) + closest(2) - 1))
+       keep2 = mergelist(inodeparts(inoderange(1,icell) + closest(3) - 1))
+       kill2 = mergelist(inodeparts(inoderange(1,icell) + closest(4) - 1))
+       call combine_two_particles(keep1,kill1)
+       call combine_two_particles(keep2,kill2)
+
+       ! now set the new positions and velocities of the pair,
+       ! which conserve the total mass, linear momentum, angular momentum and kinetic energy
+       ! of the 4 children by construction
+       xyzh(1:3,keep1) = pos_com(1:3) + r_sep*vec(1:3)
+       xyzh(1:3,keep2) = pos_com(1:3) - r_sep*vec(1:3)
+       vxyzu(1:3,keep1) = vel_com(1:3) + v_rel(1:3)
+       vxyzu(1:3,keep2) = vel_com(1:3) - v_rel(1:3)
+
+       ! rescale smoothing length for the new particle mass
+       xyzh(4,keep1) = xyzh(4,keep1)*(2.0**(1./3.))
+       xyzh(4,keep2) = xyzh(4,keep2)*(2.0**(1./3.))
+
+       apr_level(keep1) = apr_level(keep1) - int(1,kind=1)
+       apr_level(keep2) = apr_level(keep2) - int(1,kind=1)
+
+       if (ind_timesteps) then
+          call put_in_smallest_bin(keep1)
+          call put_in_smallest_bin(keep2)
+       endif
+
        ! book-keeping
        localtmp = nrelax
        if (do_relax) then
           !$omp critical
           ! use critical instead of atomic capture here to ensure relaxlist is fully written before the check loop next
-          nrelax = nrelax + 1
+          nrelax = nrelax + 2
           localtmp = nrelax
-          relaxlist(localtmp) = eldest
+          relaxlist(localtmp-1) = keep1
+          relaxlist(localtmp) = keep2
           !$omp end critical
        endif
 
-       ! If this particle was on the shuffle list previously, take it off
+       ! If these particles were on the shuffle list previously, take them off
        do n = 1,localtmp
-          if (relaxlist(n) == tuther) relaxlist(n) = 0
+          if (relaxlist(n) == kill1 .or. relaxlist(n) == kill2) relaxlist(n) = 0
        enddo
 
-       nkilled = nkilled + 2 ! this refers to the number of children killed
-
-       pmassi = 2.*pmassi
-
-       ! and now account for kinetic energy:
-       ! calculate the current kinetic energy
-       ekin = 0.5 * pmassi * dot_product(vxyzu(1:3,eldest),vxyzu(1:3,eldest))
-       ! and the difference between original and current is (what we need to match)
-       delta_ekin = ekin - ogen
-       vxyzu(4,eldest) = vxyzu(4,eldest) - delta_ekin / pmassi
-       if (vxyzu(4,eldest) < 0.) vxyzu(4,eldest) = 0.
+       nkilled = nkilled + 4 ! this refers to the number of children killed
 
     endif
 
