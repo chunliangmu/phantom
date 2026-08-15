@@ -21,6 +21,10 @@ module apr_region
 !
 ! 5: A sphere centered on the CoM of the system
 !
+! 7: A sphere around a sink particle where the region boundaries follow
+!    prescribed cumulative mass fractions (read from a file set by
+!    apr_mfrac_file in the .in file)
+!
 ! :References: None
 !
 ! :Owner: Rebecca Nealon
@@ -286,24 +290,26 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
  !use setstar_utils, only: get_mass_coord
  use sortutils, only:sort_by_radius
  use part,      only:igas,apr_level,isdead_or_accreted
+ use io,        only:fatal
  ! use energies,  only:mtot    ! [clmu] for some reason this is causing a compiler error
  integer, intent(in) :: npart,ref_dir,apr_max
  real, intent(in)    :: xyzh(:,:),aprmassoftype(:,:)
  real, intent(inout) :: apr_regions(apr_max)
- integer :: i,j
+ integer :: i,kk
  integer, allocatable :: iorder(:)
+ real, allocatable :: prescribed_mcoord(:)
  real :: massri, mtot
- ! arbitrarily define the prescribed mfrac location ()
- real, parameter :: prescribed_mfrac(10) = [ 0.5036, 0.6329, 0.7434, &
-                                           & 0.8323, 0.8960, 0.9409, & 
-                                           & 0.9699, 0.9868, 0.9964, 1.0]
- real, dimension(10) :: prescribed_mcoord
-   
 
- ! Assert (as band-aid solution for my ad-hoc fixes)
- if (apr_max /= 10) then
-    print *, "Error: apr_type==7 currently only support 9 apr_levels at hard-coded location."
+ ! there are apr_max-1 boundaries between the apr_max resolution levels;
+ ! prescribed_mfrac holds the cumulative mass fraction of each boundary
+ if (.not.allocated(prescribed_mfrac)) then
+    call fatal('update_apr_regions','mass fractions not set; apr_type=7 requires a mass fraction file')
+ elseif (size(prescribed_mfrac) /= apr_max - 1) then
+    call fatal('update_apr_regions','number of mass fractions in '//trim(apr_mfrac_file)// &
+               ' does not match apr_max',ival=apr_max)
  endif
+
+ if (apr_max <= 1) return
 
  ! calc mtot since fortran is not cooperating with us getting that in energies.f90
  mtot = 0.0
@@ -318,32 +324,33 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
  enddo
 !$omp enddo
 !$omp end parallel
- prescribed_mcoord = prescribed_mfrac * mtot
 
- allocate(iorder(npart))
+ allocate(prescribed_mcoord(apr_max-1),iorder(npart))
+ prescribed_mcoord = prescribed_mfrac * mtot
 
  ! sort particles by radius
  call sort_by_radius(npart,xyzh,iorder,apr_centre(:,1))
 
- ! reset the boundary to be at the fixed mass coordinates
+ ! reset the boundaries to be at the prescribed mass coordinates
+ ! (for ref_dir == 1 the outermost boundary is apr_regions(2) and the
+ !  innermost is apr_regions(apr_max), hence the reversed indexing)
  massri = 0.0
- if (ref_dir == 1) then
-    j = 2
- else
-    j = 1
- endif
+ kk = 1
  do i = 1, npart
-    if (isdead_or_accreted(xyzh(4,i))) cycle
+    if (isdead_or_accreted(xyzh(4,iorder(i)))) cycle
     massri = massri + aprmassoftype(igas,apr_level(iorder(i)))
-    if (massri > prescribed_mcoord(j)) then
-      apr_regions(j) = rfunc(xyzh(:,iorder(i)),apr_centre(:,1))
-      j = j + 1
-      if (j >= apr_max .or. (j == apr_max - 1 .and. ref_dir == 1)) exit
+    if (massri > prescribed_mcoord(kk)) then
+       if (ref_dir == 1) then
+          apr_regions(apr_max - kk + 1) = rfunc(xyzh(:,iorder(i)),apr_centre(:,1))
+       else
+          apr_regions(kk) = rfunc(xyzh(:,iorder(i)),apr_centre(:,1))
+       endif
+       kk = kk + 1
+       if (kk > apr_max - 1) exit
     endif
  enddo
 
- ! [clmu] [TempCode] debug
- print *, "apr_regions: ", apr_regions
+ deallocate(prescribed_mcoord,iorder)
 
 end subroutine update_apr_regions
 
