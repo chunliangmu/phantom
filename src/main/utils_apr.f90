@@ -13,14 +13,15 @@ module utils_apr
 ! :Owner: Rebecca Nealon
 !
 ! :Runtime parameters:
-!   - apr_drad     : *size of step to next region*
-!   - apr_max      : *number of additional refinement levels (3 -> 2x resolution)*
-!   - apr_rad      : *radius of innermost region*
-!   - apr_type     : *1: static, 2: sink, 3: clumps, 4: sequential sinks, 5: com, 6: vertical, 7: sink with flexible regions*
-!   - ref_dir      : *increase (1) or decrease (-1) resolution*
-!   - rho_crit_cgs : *density above which apr zones are created (g/cm^3)*
-!   - split_dir    : *1: tangent to boundary, 2: along trajectory, 3: purely randomly*
-!   - track_part   : *number of sink to track*
+!   - apr_drad       : *size of step to next region*
+!   - apr_max        : *number of additional refinement levels (3 -> 2x resolution)*
+!   - apr_mfrac_file : *file containing the cumulative mass fractions of the apr region boundaries (for apr_type=7)*
+!   - apr_rad        : *radius of innermost region*
+!   - apr_type       : *1: static, 2: sink, 3: clumps, 4: sequential sinks, 5: com, 6: vertical, 7: sink with flexible regions*
+!   - ref_dir        : *increase (1) or decrease (-1) resolution*
+!   - rho_crit_cgs   : *density above which apr zones are created (g/cm^3)*
+!   - split_dir      : *1: tangent to boundary, 2: along trajectory, 3: purely randomly*
+!   - track_part     : *number of sink to track*
 !
 ! :Dependencies: infile_utils, io, part, ptmass
 !
@@ -39,6 +40,8 @@ module utils_apr
  integer, allocatable :: npart_regions(:), track_part(:)
  real :: apr_rad = 1.0, apr_drad = 0.1, apr_centre_in(3) = 0.
  real, allocatable :: apr_regions(:), apr_centre(:,:)
+ real, allocatable :: prescribed_mfrac(:)
+ character(len=120) :: apr_mfrac_file = 'apr_mfrac.dat'
  real, save :: apr_H(2,100)  ! we enforce this to be 100
  real, allocatable :: entropy_stored(:)
  integer(kind=8), allocatable :: entropy_list(:)
@@ -137,8 +140,12 @@ subroutine write_options_apr(iunit)
     call write_inopt(apr_centre_in(1),'apr_centre(1)','centre of region x position',iunit)
     call write_inopt(apr_centre_in(2),'apr_centre(2)','centre of region y position',iunit)
     call write_inopt(apr_centre_in(3),'apr_centre(3)','centre of region z position',iunit)
- case(2,4,7)
+ case(2,4)
     call write_inopt(track_part_in,'track_part','number of sink to track',iunit)
+ case(7)
+    call write_inopt(track_part_in,'track_part','number of sink to track',iunit)
+    call write_inopt(apr_mfrac_file,'apr_mfrac_file', &
+        'file containing the cumulative mass fractions of the apr region boundaries',iunit)
  case(3)
     call write_inopt(rho_crit_cgs,'rho_crit_cgs','density above which apr zones are created (g/cm^3)',iunit)
  end select
@@ -168,16 +175,95 @@ subroutine read_options_apr(db,nerr)
     call read_inopt(apr_centre_in(1),'apr_centre(1)',db,errcount=nerr)
     call read_inopt(apr_centre_in(2),'apr_centre(2)',db,errcount=nerr)
     call read_inopt(apr_centre_in(3),'apr_centre(3)',db,errcount=nerr)
- case(2,4,7)
+ case(2,4)
     call read_inopt(track_part_in,'track_part',db,errcount=nerr,min=1)
+ case(7)
+    call read_inopt(track_part_in,'track_part',db,errcount=nerr,min=1)
+    call read_inopt(apr_mfrac_file,'apr_mfrac_file',db,errcount=nerr)
  case(3)
     call read_inopt(rho_crit_cgs,'rho_crit_cgs',db,errcount=nerr,min=0.)
  end select
+
+ if (apr_type == 7) call read_apr_mfrac()
 
  call read_inopt(apr_rad,'apr_rad',db,errcount=nerr,min=tiny(apr_rad))
  call read_inopt(apr_drad,'apr_drad',db,errcount=nerr,min=tiny(apr_drad))
 
 end subroutine read_options_apr
+
+!-----------------------------------------------------------------------
+!+
+!  Reads the cumulative mass fractions of the apr region boundaries
+!  for apr_type == 7 (flexible regions) from a plain text file.
+!
+!  The file should contain apr_max (i.e. the number of additional
+!  refinement levels) cumulative mass fractions, one for each boundary
+!  between adjacent refinement levels, in increasing order from the
+!  region centre. A trailing value of 1.0 (the total mass fraction) is
+!  also accepted. Comment lines (starting with #) and blank lines are
+!  ignored; one value per line.
+!+
+!-----------------------------------------------------------------------
+subroutine read_apr_mfrac()
+ use io, only:fatal,warning
+ integer, parameter :: maxvals = 1024
+ real    :: vals(maxvals), x
+ integer :: iu, ioerr, nvals, i, icomment
+ character(len=256) :: line
+ logical :: ivalid
+
+ nvals = 0
+ vals = 0.
+
+ open(newunit=iu,file=trim(apr_mfrac_file),status='old',form='formatted',iostat=ioerr)
+ if (ioerr /= 0) call fatal('read_apr_mfrac','cannot open '//trim(apr_mfrac_file)// &
+                            ' containing the mass fractions for apr_type=7')
+
+ do while (nvals < maxvals)
+    read(iu,"(a)",iostat=ioerr) line
+    if (ioerr /= 0) exit
+    icomment = index(line,'#')
+    if (icomment > 0) line(icomment:) = ' '
+    if (len_trim(adjustl(line)) == 0) cycle
+    read(line,*,iostat=ioerr) x
+    if (ioerr /= 0) call fatal('read_apr_mfrac','error reading mass fraction from '// &
+                               trim(apr_mfrac_file),ival=nvals+1)
+    nvals = nvals + 1
+    vals(nvals) = x
+ enddo
+ close(iu)
+
+ if (nvals >= maxvals) call fatal('read_apr_mfrac','too many values in '//trim(apr_mfrac_file),ival=maxvals)
+
+ if (nvals == apr_max_in) then
+    ! apr_max (= apr_max_in) boundary mass fractions, nothing else required
+ elseif (nvals == apr_max_in + 1) then
+    ! a trailing value of the total mass fraction (1.0) is also accepted
+    if (abs(vals(nvals) - 1.) > 1.e-6) call warning('read_apr_mfrac','last value in '// &
+       trim(apr_mfrac_file)//' is not 1.0 and will be ignored')
+    nvals = apr_max_in
+ else
+    call fatal('read_apr_mfrac','expected apr_max (number of additional refinement levels) cumulative mass fractions in '//&
+               trim(apr_mfrac_file),ival=apr_max_in)
+ endif
+
+ allocate(prescribed_mfrac(apr_max_in))
+ prescribed_mfrac = vals(1:apr_max_in)
+
+ ! check that the fractions are strictly increasing and lie between 0 and 1
+ ivalid = .true.
+ do i = 1,apr_max_in
+    if (prescribed_mfrac(i) <= 0. .or. prescribed_mfrac(i) >= 1.) ivalid = .false.
+    if (i > 1) then
+       if (prescribed_mfrac(i) <= prescribed_mfrac(i-1)) ivalid = .false.
+    endif
+ enddo
+ if (.not.ivalid) call fatal('read_apr_mfrac','mass fractions in '//trim(apr_mfrac_file)// &
+     ' should be strictly increasing values between 0 and 1')
+
+ print*, 'apr mass fraction boundaries: ', prescribed_mfrac
+
+end subroutine read_apr_mfrac
 
 !-----------------------------------------------------------------------
 !+
