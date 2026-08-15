@@ -333,7 +333,7 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
     j = 1
  endif
  do i = 1, npart
-    if (isdead_or_accreted(xyzh(4,i))) cycle
+    if (isdead_or_accreted(xyzh(4,iorder(i)))) cycle
     massri = massri + aprmassoftype(igas,apr_level(iorder(i)))
     if (massri > prescribed_mcoord(j)) then
       apr_regions(j) = rfunc(xyzh(:,iorder(i)),apr_centre(:,1))
@@ -341,9 +341,6 @@ subroutine update_apr_regions(npart,xyzh,ref_dir,apr_max,aprmassoftype,apr_regio
       if (j >= apr_max .or. (j == apr_max - 1 .and. ref_dir == 1)) exit
     endif
  enddo
-
- ! [clmu] [TempCode] debug
- print *, "apr_regions: ", apr_regions
 
 end subroutine update_apr_regions
 
