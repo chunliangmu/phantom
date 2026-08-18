@@ -14,7 +14,7 @@ module testapr
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: apr, boundary, dim, energies, io, mpidomain, mpiutils,
+! :Dependencies: apr, boundary, deriv, dim, energies, io, mpidomain, mpiutils,
 !   part, random, testutils, unifdis, utils_apr
 !
  use testutils, only:checkval,update_test_scores
@@ -35,8 +35,8 @@ subroutine test_apr(ntests,npass)
  use unifdis,      only:set_unifdis
  use boundary,     only:dxbound,dybound,dzbound,xmin,xmax,ymin,ymax,zmin,zmax
  use part,         only:npart,npartoftype,hfact,xyzh,init_part,massoftype,radprop
- use part,         only:isetphase,igas,iphase,vxyzu,fxyzu,apr_level,maxvxyzu
- use part,         only:rhoh,igas,igasP,eos_vars
+ use part,         only:isetphase,igas,iphase,vxyzu,fxyzu,apr_level,maxvxyzu,init_rho_from_h
+ use part,         only:rho,igasP,eos_vars
  use mpidomain,    only:i_belong
  use mpiutils,     only:reduceall_mpi
  use dim,          only:periodic,use_apr,do_radiation
@@ -45,11 +45,12 @@ subroutine test_apr(ntests,npass)
  use energies,     only:compute_energies,angtot,etot,totmom,ekin,etherm
  use random,       only:ran2
  use eos,          only:gamma
+ use deriv,        only:get_density_global
  integer, intent(inout) :: ntests,npass
  real :: psep,rhozero,time,totmass, etotin, totmomin
  real :: angtotin, ekinin, ethermin
- real :: tolang, tolen, tolmom, tot_entropy, rhoi, tolent, entropin
- integer :: original_npart,splitted,nfailed(13),i,iseed,tolpart
+ real :: tolang, tolen, tolmom, hcoarse,hfine,tot_entropy, rhoi, tolent, entropin
+ integer :: original_npart,splitted,nfailed(13),i,iseed,ncoarse,nfine,tolpart
 
  if (use_apr) then
     if (id==master) write(*,"(/,a)") '--> TESTING APR MODULE'
@@ -79,8 +80,10 @@ subroutine test_apr(ntests,npass)
                   hfact,npart,xyzh,periodic,mask=i_belong)
 
  original_npart = npart
+ npartoftype(igas) = npart
  massoftype(igas) = totmass/reduceall_mpi('+',npart)
  iphase(1:npart) = isetphase(igas,iactive=.true.)
+ call init_rho_from_h()
 
  ! this is to prevent a (reasonable) problem when running this test with DEBUG=yes and radiation
  if (do_radiation) then
@@ -95,7 +98,7 @@ subroutine test_apr(ntests,npass)
 
  ! Here we need to initialse the pressure (for the entropy calculation later)
  do i=1,npart
-    rhoi = rhoh(xyzh(4,i),massoftype(igas))
+    rhoi = rho(i)
     eos_vars(igasP,i) = (gamma - 1.)*rhoi*vxyzu(4,i)
  enddo
 
@@ -103,6 +106,44 @@ subroutine test_apr(ntests,npass)
  call setup_apr_region_for_test()
  apr_centre(:,1:2) = 20. ! just moves the APR region away from the box so you don't have any split or merge
  call update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
+
+ !
+ ! mixed masses on a uniform lattice: neighbour counts (hence h) should match,
+ ! unlike h(rho) which would split by m^{1/3}
+ !
+ write(*,"(/,a)") '--> checking h from number density at mixed APR levels'
+ do i=1,npart
+    if (mod(i,2)==0) apr_level(i) = 2
+ enddo
+ call get_density_global(1)
+ ncoarse = 0
+ nfine   = 0
+ hcoarse = 0.
+ hfine   = 0.
+ do i=1,npart
+    if (apr_level(i) == 1) then
+       ncoarse = ncoarse + 1
+       hcoarse = hcoarse + xyzh(4,i)
+    else
+       nfine = nfine + 1
+       hfine = hfine + xyzh(4,i)
+    endif
+ enddo
+ ncoarse = int(reduceall_mpi('+',ncoarse))
+ nfine   = int(reduceall_mpi('+',nfine))
+ hcoarse = reduceall_mpi('+',hcoarse)
+ hfine   = reduceall_mpi('+',hfine)
+ if (ncoarse > 0) hcoarse = hcoarse/ncoarse
+ if (nfine > 0) hfine = hfine/nfine
+ if (ncoarse > 0 .and. nfine > 0) then
+    call checkval(hfine,hcoarse,5.e-2,nfailed(8),'h fine vs coarse (number density)')
+ else
+    nfailed(8) = 1
+    if (id==master) write(*,*) 'ERROR: mixed APR levels not present for h(n) test'
+ endif
+ call update_test_scores(ntests,nfailed(8:8),npass)
+ apr_level(1:npart) = 1
+ call init_rho_from_h()
 
  ! Initialise the energies values
  call compute_energies(0.)
@@ -195,7 +236,7 @@ end subroutine setup_apr_region_for_test
 
 
 subroutine calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
- use part, only:igasP,igas,aprmassoftype,rhoh,iorig
+ use part, only:igasP,igas,aprmassoftype,rho
  use eos,  only:gamma
  real, intent(in) :: eos_vars(:,:),xyzh(:,:)
  integer(kind=1), intent(in) :: apr_level(:)
@@ -207,7 +248,7 @@ subroutine calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
  tot_entropy = 0.
  do ii = 1,npart
     pmassi = aprmassoftype(igas,apr_level(ii))
-    rhoi = rhoh(xyzh(4,ii),pmassi)
+    rhoi = rho(ii)
     tot_entropy = tot_entropy + (eos_vars(igasP,ii)*rhoi**(-gamma)*pmassi)
     write(10,*) ii, pmassi, eos_vars(igasP,ii),(eos_vars(igasP,ii)*rhoi**(-gamma)*pmassi)
  enddo
