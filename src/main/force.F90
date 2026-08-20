@@ -971,7 +971,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
  real,            intent(in)    :: pmassi
  integer,         intent(in)    :: listneigh(:)
  integer,         intent(in)    :: nneigh
- real,            intent(in)    :: xyzcache(:,:)
+ real,            intent(in)    :: xyzcache(nforcecache,maxcellcache)
  real,            intent(out)   :: fsum(maxfsum)
  real,            intent(out)   :: vsigmax
  logical,         intent(in)    :: ifilledcellcache
@@ -1423,7 +1423,10 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
 #endif
 
 #ifdef GRAVITY
-       fgrav = 0.5*pmassj*(fmi + fmj) + 0.5*(dsofti + dsoftj)
+       ! derivation of this term has been performed carefully by DJP to be
+       ! correct when h is computed from number density, the expression
+       ! reduces to that given in PM07 when m_i=m_j
+       fgrav = 0.5*pmassj*(fmi + fmj) + 0.5*(dsofti + dsoftj*(pmassj/pmassi))
 #else
        fgrav = 0.
 #endif
@@ -2611,7 +2614,7 @@ subroutine compute_cell(cell,listneigh,nneigh,Bevol,xyzh,vxyzu,fxyzu, &
  integer(kind=1), intent(inout) :: ibin_wake(:)
  integer(kind=1), intent(in)    :: ibinnow_m1
  real,            intent(in)    :: stressmax
- real,            intent(in)    :: xyzcache(:,:)
+ real,            intent(in)    :: xyzcache(nforcecache,maxcellcache)
  real,            intent(in)    :: rad(:,:)
  real,            intent(inout) :: radprop(:,:)
  real,            intent(in)    :: dens(:),metrics(:,:,:,:)
