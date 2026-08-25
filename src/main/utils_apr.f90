@@ -247,6 +247,10 @@ subroutine read_apr_mfrac()
                trim(apr_mfrac_file),ival=apr_max_in)
  endif
 
+ if (allocated(prescribed_mfrac)) then
+    deallocate(prescribed_mfrac)
+    call warning('read_apr_mfrac','Overwriting existing prescribed_mfrac with new values from file')
+ endif
  allocate(prescribed_mfrac(apr_max_in))
  prescribed_mfrac = vals(1:apr_max_in)
 
