@@ -103,7 +103,7 @@ module densityforce
  integer, parameter :: maxdensits = 100
 
  !--statistics which can be queried later
- integer, private         :: maxneighact,ncalls_neigh
+ integer, private         :: maxneighact,minneighact,ncalls_neigh
  integer(kind=8), private :: nneightry,maxneightry,nneighact,ncalc
  integer(kind=8), private :: nptot = -1
 
@@ -131,7 +131,8 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
  use mpimemory,   only:stack_waiting => dens_stack_2
  use mpimemory,   only:stack_redo    => dens_stack_3
  use mpiderivs,   only:send_cell,recv_cells,check_send_finished,init_cell_exchange,&
-                       finish_cell_exchange,recv_while_wait,reset_cell_counters,cell_counters
+                       finish_cell_exchange,recv_while_wait,reset_cell_counters,cell_counters,&
+                       init_send_requests
  use timestep,    only:rhomaxnow
  use viscosity,   only:irealvisc
  use io_summary,  only:summary_variable,iosumhup,iosumhdn
@@ -187,7 +188,7 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
     write(iprint,*) ' cell cache =',isizecellcache,' neigh cache = ',isizeneighcache,' icall = ',icall
 
  if (icall==0 .or. icall==1) then
-    call reset_neighbour_stats(nneightry,nneighact,maxneightry,maxneighact,ncalc,ncalls_neigh)
+    call reset_neighbour_stats(nneightry,nneighact,maxneightry,maxneighact,minneighact,ncalc,ncalls_neigh)
     nwarnup       = 0
     nwarndown     = 0
     nwarnroundoff = 0
@@ -280,6 +281,7 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
 !$omp reduction(+:ncalc) &
 !$omp reduction(+:np) &
 !$omp reduction(max:maxneighact) &
+!$omp reduction(min:minneighact) &
 !$omp reduction(max:maxneightry) &
 !$omp reduction(+:nneighact) &
 !$omp reduction(+:nneightry) &
@@ -294,8 +296,8 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
  call get_timings(t1,tcpu1)
  !$omp end single
 
- !--initialise send requests to 0
- irequestsend = 0
+ !--initialise send requests to null
+ call init_send_requests(irequestsend)
 
  !$omp do schedule(runtime)
  over_cells: do icell=1,int(ncells)
@@ -376,7 +378,7 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
        if (.not. do_export) then
           call store_results(icall,cell,getdv,getdB,realviscosity,stressmax,xyzh,gradh,divcurlv, &
                divcurlB,alphaind,dvdx,vxyzu,&
-               dustfrac,rhomax,nneightry,nneighact,maxneightry,maxneighact,np,ncalc,radprop)
+               dustfrac,rhomax,nneightry,nneighact,maxneightry,maxneighact,minneighact,np,ncalc,radprop)
           nlocal = nlocal + 1
        endif
     endif
@@ -499,7 +501,7 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
           else
              call store_results(icall,cell,getdv,getdB,realviscosity,stressmax,xyzh,gradh,divcurlv, &
                   divcurlB,alphaind,dvdx,vxyzu, &
-                  dustfrac,rhomax,nneightry,nneighact,maxneightry,maxneighact,np,ncalc,radprop)
+                  dustfrac,rhomax,nneightry,nneighact,maxneightry,maxneighact,minneighact,np,ncalc,radprop)
           endif
 
        enddo over_waiting
@@ -1151,9 +1153,9 @@ end subroutine reduce_and_print_warnings
 !   and will be correct ONLY on the master thread)
 !+
 !----------------------------------------------------------------
-subroutine get_neighbour_stats(trialmean,actualmean,maxtrial,maxactual,nrhocalc,nactualtot)
+subroutine get_neighbour_stats(trialmean,actualmean,maxtrial,maxactual,minactual,nrhocalc,nactualtot)
  real,            intent(out) :: trialmean,actualmean
- integer,         intent(out) :: maxtrial,maxactual
+ integer,         intent(out) :: maxtrial,maxactual,minactual
  integer(kind=8), intent(out) :: nrhocalc,nactualtot
 
  if (nptot > 0) then
@@ -1161,24 +1163,27 @@ subroutine get_neighbour_stats(trialmean,actualmean,maxtrial,maxactual,nrhocalc,
     actualmean   = nneighact/real(nptot)
     maxtrial     = int(maxneightry)
     maxactual    = maxneighact
+    minactual    = minneighact
     nrhocalc     = ncalc
     nactualtot   = nneighact
  else ! densityforce has not been called
     trialmean = -1; actualmean   = -1
     maxtrial  = -1; maxactual    = -1
+    minactual = -1
     nrhocalc  = -1; nactualtot   = -1
  endif
 
 end subroutine get_neighbour_stats
 
-subroutine reset_neighbour_stats(nneightry,nneighact,maxneightry,maxneighact,ncalc,ncalls_neigh)
- integer,         intent(out) :: maxneighact,ncalls_neigh
+subroutine reset_neighbour_stats(nneightry,nneighact,maxneightry,maxneighact,minneighact,ncalc,ncalls_neigh)
+ integer,         intent(out) :: maxneighact,minneighact,ncalls_neigh
  integer(kind=8), intent(out) :: ncalc,nneightry,nneighact,maxneightry
 
  nneightry = 0
  nneighact = 0
  maxneightry = 0
  maxneighact = 0
+ minneighact = huge(minneighact)
  ncalc = 0_8
  nneighact = 0
  ncalls_neigh = 0_8
@@ -1201,6 +1206,7 @@ subroutine reduce_and_print_neighbour_stats(np)
  nneighact   = reduce_mpi('+',nneighact)
  maxneightry = reduce_mpi('max',maxneightry)
  maxneighact = int(reduce_mpi('max',maxneighact))
+ minneighact = int(reduce_mpi('min',minneighact))
  ncalls_neigh     = int(reduce_mpi('+',ncalls_neigh))
  ncalc       = reduce_mpi('+',ncalc)
 
@@ -1208,7 +1214,8 @@ subroutine reduce_and_print_neighbour_stats(np)
     write(iprint,"(1x,a,f11.2,2(a,f7.2))") 'trial neigh mean  :',nneightry/real(nptot), &
                  ', real neigh mean = ',nneighact/real(nptot), &
                  ' ratio try/act= ',nneightry/real(nneighact)
-    write(iprint,"(1x,a,i11,a,i8)")   'trial neigh max   :',maxneightry,', max real neigh = ',maxneighact
+    write(iprint,"(1x,a,i11,a,i8,a,i8)") 'trial neigh max   :',maxneightry, &
+                 ', max real neigh = ',maxneighact,', min = ',minneighact
     write(iprint,"(1x,a,i11,a,f7.3)") 'n neighbour calls :',ncalls_neigh, ', mean per part   = ',ncalls_neigh/real(nptot) + 1
     write(iprint,"(1x,a,i11,a,f7.3)") 'n density calcs   :',ncalc,', mean per part   = ',ncalc/real(nptot)
  endif
@@ -1483,7 +1490,8 @@ end subroutine finish_cell
 !+
 !--------------------------------------------------------------------------
 pure subroutine finish_rhosum(rhosum,pmassi,hi,iterating,rhoi,ni,gradhi,zeta,gradsofti,dhdni_out,omegat_out)
- use part,  only:dhdn
+ use part,    only:dhdn
+ use options, only:two_kernel
  real,         intent(in)  :: rhosum(maxrhosum)
  real,         intent(in)  :: pmassi
  real,         intent(in)  :: hi
@@ -1497,6 +1505,7 @@ pure subroutine finish_rhosum(rhosum,pmassi,hi,iterating,rhoi,ni,gradhi,zeta,gra
  real,         intent(out), optional :: omegat_out
 
  real           :: omegat,dhdni,gradh_m,gradh_n,ni_loc,zeta_loc
+ real           :: cnormn,wab0n,gradh0n
  real(kind=8)   :: hi1,hi21,hi31,hi41
 
  hi1   = 1./hi
@@ -1504,10 +1513,21 @@ pure subroutine finish_rhosum(rhosum,pmassi,hi,iterating,rhoi,ni,gradhi,zeta,gra
  hi31  = hi1*hi21
  hi41  = hi21*hi21
 
+ ! number-density kernel is Wtilde when two_kernel, else same as W
+ if (two_kernel) then
+    cnormn  = cnormk_tilde
+    wab0n   = wab0_tilde
+    gradh0n = gradh0_tilde
+ else
+    cnormn  = cnormk
+    wab0n   = wab0
+    gradh0n = gradh0
+ endif
+
  rhoi     = cnormk*(rhosum(irhoi) + wab0*pmassi)*hi31
- ni_loc   = cnormk_tilde*(rhosum(ini) + wab0_tilde)*hi31
+ ni_loc   = cnormn*(rhosum(ini) + wab0n)*hi31
  gradh_m  = real(cnormk*(rhosum(igradhi) + gradh0*pmassi)*hi41)
- gradh_n  = real(cnormk_tilde*(rhosum(igradhni) + gradh0_tilde)*hi41)
+ gradh_n  = real(cnormn*(rhosum(igradhni) + gradh0n)*hi41)
  dhdni    = dhdn(hi)
  omegat   = 1. - dhdni*gradh_n
  zeta_loc = dhdni*gradh_m
@@ -1530,7 +1550,7 @@ end subroutine finish_rhosum
 subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
                          gradh,divcurlv,divcurlB,alphaind,dvdx,vxyzu,&
                          dustfrac,rhomax,nneightry,nneighact,maxneightry,&
-                         maxneighact,np,ncalc,radprop)
+                         maxneighact,minneighact,np,ncalc,radprop)
  use part,        only:hn,get_partinfo,iamgas,&
                        mhd,maxphase,massoftype,igas,ndustlarge,ndustsmall,treecache,&
                        maxgradh,idust,ifluxx,ifluxz,ithick,aprmassoftype,rho
@@ -1562,6 +1582,7 @@ subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
  integer(kind=8), intent(inout) :: nneighact
  integer(kind=8), intent(inout) :: maxneightry
  integer,         intent(inout) :: maxneighact
+ integer,         intent(inout) :: minneighact
  integer,         intent(inout) :: np
  integer(kind=8), intent(inout) :: ncalc
  real,            intent(inout) :: radprop(:,:)
@@ -1696,6 +1717,7 @@ subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
        nneighact = nneighact + cell%nneigh(i)
        maxneightry = max(int(maxneightry),cell%nneightry)
        maxneighact = max(maxneighact,cell%nneigh(i))
+       minneighact = min(minneighact,cell%nneigh(i))
     endif
  enddo
  np = np + cell%npcell

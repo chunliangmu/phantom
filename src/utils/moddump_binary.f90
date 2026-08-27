@@ -16,9 +16,10 @@ module moddump
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: centreofmass, dim, eos, extern_corotate, externalforces,
-!   infile_utils, io, options, part, physcon, prompting, readwrite_dumps,
-!   readwrite_mesa, setbinary, table_utils, timestep, units, vectorutils
+! :Dependencies: centreofmass, dim, eos, extern_corotate,
+!   extern_gwinspiral, externalforces, infile_utils, io, options, part,
+!   physcon, prompting, readwrite_dumps, readwrite_mesa, setbinary,
+!   table_utils, timestep, units, vectorutils
 !
  implicit none
  character(len=*), parameter, public :: moddump_flags = ''
@@ -27,7 +28,7 @@ contains
 
 subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  use part,              only:nptmass,xyzmh_ptmass,vxyz_ptmass,ihacc,ihsoft,igas,&
-                             delete_dead_or_accreted_particles,mhd,rhoh,shuffle_part,&
+                             delete_dead_or_accreted_particles,mhd,rho,shuffle_part,&
                              kill_particle,copy_particle,aprmassoftype,apr_level
  use setbinary,         only:set_binary
  use units,             only:umass,udist,utime
@@ -358,7 +359,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
 
        irhomax = 1
        do i=1,npart
-          rhopart = rhoh(xyzh(4,i), massoftype(igas))
+          rhopart = rho(i)
           if (rhopart > rhomax) then
              rhomax = rhopart
              irhomax = i

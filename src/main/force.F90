@@ -236,7 +236,8 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  use dust,         only:drag_implicit
  use nicil,        only:nimhd_get_jcbcb
  use mpiderivs,    only:send_cell,recv_cells,check_send_finished,init_cell_exchange,&
-                        finish_cell_exchange,recv_while_wait,reset_cell_counters,cell_counters
+                        finish_cell_exchange,recv_while_wait,reset_cell_counters,cell_counters,&
+                        init_send_requests
  use mpimemory,    only:reserve_stack,reset_stacks,get_cell,write_cell
  use mpimemory,    only:stack_remote  => force_stack_1
  use mpimemory,    only:stack_waiting => force_stack_2
@@ -506,8 +507,8 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  call get_timings(t1,tcpu1)
  !$omp end single
 
- !--initialise send requests to 0
- irequestsend = 0
+ !--initialise send requests to null
+ call init_send_requests(irequestsend)
 
  !$omp do schedule(runtime)
  over_cells: do icell=1,int(ncells)
@@ -928,7 +929,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
                           alphau,alphaB,bulkvisc,stressmax,&
                           ndrag,nstokes,nsuper,ts_min,ibinnow_m1,ibin_wake,ibin_neighi,&
                           ignoreself,rad,radprop,dens,metrics,apr_level,dt)
- use kernel,      only:grkern,cnormk,radkern2,get_kernel_tilde
+ use kernel,      only:grkern,cnormk,cnormk_tilde,radkern2,get_kernel_tilde
  use part,        only:igas,idust,isink,iohm,ihall,iambi,maxphase,iactive,xyzmh_ptmass,&
                        iamtype,iamdust,get_partinfo,mhd,maxvxyzu,maxdvdx,igasP,ics,iradP,itemp,&
                        ihsoft
@@ -936,7 +937,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
                       use_sinktree,disc_viscosity,track_lum,igradomega,igradsoft,igradzeta
  use part,        only:rho,dvdx,aprmassoftype,shortsinktree
  use nicil,       only:nimhd_get_jcbcb,nimhd_get_dBdt
- use eos,         only:ieos,eos_is_non_ideal,icooling
+ use eos,         only:ieos,eos_is_non_ideal,use_var_comp,icooling
  use eos_stamatellos, only:gradP_cool,getopac_opdep
 #ifdef GRAVITY
  use kernel,      only:kernel_softening
@@ -1353,7 +1354,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
           grkerni = grkern(q2i,qi)*hfacgrkern
           if (two_kernel) then
              call get_kernel_tilde(q2i,qi,wtilde,grkern_tildei)
-             grkern_tildei = grkern_tildei*hfacgrkern
+             grkern_tildei = grkern_tildei*hi41*cnormk_tilde
           else
              grkern_tildei = grkerni
           endif
@@ -1385,7 +1386,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
           grkernj = grkern(q2j,qj)*hj21*hj21*cnormk
           if (two_kernel) then
              call get_kernel_tilde(q2j,qj,wtilde,grkern_tildej)
-             grkern_tildej = grkern_tildej*hj21*hj21*cnormk
+             grkern_tildej = grkern_tildej*hj21*hj21*cnormk_tilde
           else
              grkern_tildej = grkernj
           endif
@@ -1446,7 +1447,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
 
        if (iamgasj .and. .not.isothermal) then
           enj = vxyzu(4,j)
-          if (eos_is_non_ideal(ieos)) then  ! only do this if eos requires temperature in physical units
+          if (eos_is_non_ideal(ieos) .or. use_var_comp) then  ! only do this if eos requires temperature in physical units
              tempj = eos_vars(itemp,j)
              denij = 0.5*(eni/max(tempi,1.) + enj/max(tempj,1.))*(tempi - tempj)  !dU = c_V * dT, but with a floor to avoid issues with very low temperatures
           else
