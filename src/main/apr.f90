@@ -144,7 +144,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  use dim,        only:maxp,ind_timesteps,maxvxyzu
  use part,       only:ntot,isdead_or_accreted,igas,aprmassoftype,&
                     shuffle_part,iphase,iactive,maxp,npartoftype,&
- use part,       only:igasP,rho,eos_vars,iorig
+                    igasP,rho,eos_vars,iorig
  use quitdump,   only:quit
  use relaxem,    only:relax_particles
  use utils_apr,  only:find_closest_region,icentre

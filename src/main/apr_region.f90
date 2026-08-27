@@ -47,7 +47,7 @@ contains
 !-----------------------------------------------------------------------
 subroutine set_apr_centre(apr_type,apr_centre,ntrack,track_part)
  use part, only:xyzmh_ptmass,xyzh,npart,vxyzu,nptmass,vxyz_ptmass,apr_level,rho
- use part, only:poten
+ use part, only:aprmassoftype,poten
  use centreofmass, only:get_centreofmass
  integer, intent(in)  :: apr_type
  real,    intent(out) :: apr_centre(3,ntrack_max)
