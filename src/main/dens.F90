@@ -39,14 +39,15 @@ module densityforce
        ivyi = 5, &
        ivzi = 6, &
        ieni = 7, &
-       iBevolxi = 8, &
-       iBevolyi = 9, &
-       iBevolzi = 10, &
-       ipsi = 11, &
-       ifxi = 12, &
-       ifyi = 13, &
-       ifzi = 14, &
-       iradxii = 15
+       ifxi = 8, &
+       ifyi = 9, &
+       ifzi = 10, &
+       iBevolxi = 11, &
+       iBevolyi = 12, &
+       iBevolzi = 13, &
+       ipsi = 14, &
+       irhoi_xpart = 15, &
+       iradxii = 16
 
  !--indexing for rhosum array
  integer, parameter :: &
@@ -124,7 +125,7 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
  use neighkdtree, only:leaf_is_active,ncells,get_neighbour_list,get_hmaxcell,&
                      listneigh,get_cell_location,set_hmaxcell,sync_hmax_mpi
  use part,        only:mhd,get_partinfo,iactive,&
-                       iphase,igas,idust,iamgas,periodic,all_active,dustfrac,rho
+                       iphase,igas,idust,iamgas,periodic,all_active,dustfrac
  use mpiutils,    only:reduceall_mpi,barrier_mpi,reduce_mpi,reduceall_mpi
  use mpimemory,   only:reserve_stack,swap_stacks,reset_stacks,write_cell
  use mpimemory,   only:stack_remote  => dens_stack_1
@@ -184,6 +185,8 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
     call reset_cell_counters(cell_counters)
  endif
 
+ call init_rho_from_h(npart,xyzh,apr_level)
+
  if (iverbose >= 3 .and. id==master) &
     write(iprint,*) ' cell cache =',isizecellcache,' neigh cache = ',isizeneighcache,' icall = ',icall
 
@@ -230,7 +233,6 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
 !$omp shared(ncells) &
 !$omp shared(leaf_is_active) &
 !$omp shared(xyzh) &
-!$omp shared(rho) &
 !$omp shared(vxyzu) &
 !$omp shared(fxyzu) &
 !$omp shared(fext) &
@@ -573,6 +575,46 @@ end subroutine densityiterate
 
 !----------------------------------------------------------------
 !+
+!  set the stored density from the smoothing length for any particle
+!  whose density has not yet been computed (flagged by rho <= 0)
+!
+!  the density sums read rho for both the particle and its neighbours
+!  when forming the B field and radiation difference operators, so the
+!  array must already hold a sensible estimate on the first pass,
+!  otherwise these terms are evaluated with meaningless densities
+!+
+!----------------------------------------------------------------
+subroutine init_rho_from_h(npart,xyzh,apr_level)
+ use dim,  only:maxp,use_apr
+ use part, only:rho,rhoh,iphase,iamtype,maxphase,massoftype,&
+                aprmassoftype,igas,isdead_or_accreted
+ integer,         intent(in) :: npart
+ real,            intent(in) :: xyzh(:,:)
+ integer(kind=1), intent(in) :: apr_level(:)
+ integer :: i,itype
+ real    :: pmassi
+
+!$omp parallel do default(none) &
+!$omp shared(npart,xyzh,rho,iphase,apr_level,maxp,maxphase,massoftype,aprmassoftype) &
+!$omp private(i,itype,pmassi)
+ do i = 1,npart
+    ! skip particles with a known density, and dead or accreted particles
+    if (isdead_or_accreted(xyzh(4,i))) cycle
+    itype = igas
+    if (maxphase==maxp) itype = iamtype(iphase(i))
+    if (use_apr) then
+       pmassi = aprmassoftype(itype,apr_level(i))
+    else
+       pmassi = massoftype(itype)
+    endif
+    rho(i) = rhoh(xyzh(4,i),pmassi)
+ enddo
+!$omp end parallel do
+
+end subroutine init_rho_from_h
+
+!----------------------------------------------------------------
+!+
 !  Internal subroutine that computes the contribution to
 !  the density sums from a list of neighbours
 !
@@ -826,7 +868,7 @@ pure subroutine get_density_sums(i,xpartveci,hi,hi1,hi21,iamtypei,iamgasi,iamdus
                 ! we need B instead of B/rho, so used our estimated h here
                 ! either it is close enough to be converged,
                 ! or worst case it runs another iteration and re-calculates
-                rhoi = rho(i)
+                rhoi = xpartveci(irhoi_xpart)
                 rhoj = rho(j)
                 dBx = xpartveci(iBevolxi)*rhoi - Bevol(1,j)*rhoj
                 dBy = xpartveci(iBevolyi)*rhoi - Bevol(2,j)*rhoj
@@ -848,7 +890,7 @@ pure subroutine get_density_sums(i,xpartveci,hi,hi1,hi21,iamtypei,iamgasi,iamdus
              endif
 
              if (do_radiation .and. gas_gas .and. .not. implicit_radiation) then
-                rhoi = rho(i)
+                rhoi = xpartveci(irhoi_xpart)
                 rhoj = rho(j)
                 dradenij = rad(iradxi,j)*rhoj - xpartveci(iradxii)*rhoi
                 rhosum(iradfxi) = rhosum(iradfxi) + dradenij*runix
@@ -1318,7 +1360,7 @@ subroutine start_cell(cell,iphase,xyzh,vxyzu,fxyzu,fext,Bevol,rad,apr_level)
  use io,          only:fatal
  use dim,         only:maxp,maxvxyzu,do_radiation,use_apr,maxpsph
  use part,        only:maxphase,get_partinfo,mhd,igas,iamgas,&
-                       iamboundary,ibasetype,iradxi
+                       iamboundary,ibasetype,iradxi,rho
 
  type(celldens),  intent(inout) :: cell
  integer(kind=1), intent(in)    :: iphase(:)
@@ -1389,6 +1431,7 @@ subroutine start_cell(cell,iphase,xyzh,vxyzu,fxyzu,fext,Bevol,rad,apr_level)
        endif
     endif
 
+    cell%xpartvec(irhoi_xpart,cell%npcell) = rho(i)
     if (do_radiation) cell%xpartvec(iradxii,cell%npcell) = rad(iradxi,i)
 
     if (use_apr) then

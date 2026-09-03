@@ -680,6 +680,7 @@ subroutine init_part
  shortsinktree = 1
  fxyz_ptmass_tree = 0.
  ! initialise arrays not passed to setup routine to zero
+ rho = 0. ! flags density as not yet computed, see init_rho_from_h
  if (mhd) then
     Bevol = 0.
     Bxyz  = 0.
@@ -911,12 +912,13 @@ subroutine init_rho_from_h(i1,i2)
  ib = npart
  if (present(i1)) ia = i1
  if (present(i2)) ib = i2
+ iamtypei = igas
+
  do i=ia,ib
-    if (xyzh(4,i) > 0.) then
+    if (.not. isdead_or_accreted(xyzh(4,i))) then
        if (maxphase==maxp) then
           call get_partinfo(iphase(i),iactivei,iamgasi,iamdusti,iamtypei)
-       else
-          iamtypei = igas
+          if (iamtypei <= 0) iamtypei = igas
        endif
        if (use_apr) then
           pmassi = aprmassoftype(iamtypei,apr_level(i))

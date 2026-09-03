@@ -136,11 +136,11 @@ module dim
                                   radensumforce
 
 ! xpartveci
- integer, parameter :: maxxpartvecidens = 14 + radenxpartvetden
+ integer, parameter :: maxxpartvecidens = 15 + radenxpartvetden
 
  integer, parameter :: maxxpartvecvars = 63 ! Number of scalars in xpartvec
  integer, parameter :: maxxpartvecarrs = 2  ! Number of arrays in xpartvec
- integer, parameter :: maxxpartvecGR   = 34 ! dens, 16 gcov, 16 gcon, plus hydro zeta
+ integer, parameter :: maxxpartvecGR   = 33 ! dens, 16 gcov, 16 gcon
  integer, parameter :: maxxpartveciforce = maxxpartvecvars + &              ! Total number of values
                                            maxxpartvecarrs*(maxdusttypes-1) + &
                                            radenxpartvecforce + &
