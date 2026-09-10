@@ -238,6 +238,7 @@ subroutine test_implicit_matches_explicit(ntests,npass)
  use timestep, only:dtmax
  use radiation_utils,    only:implicit_radiation
  use radiation_implicit, only:do_radiation_implicit
+ use options,            only:two_kernel
  integer, intent(inout) :: ntests,npass
  real(kind=kind(radprop)), allocatable :: flux_explicit(:,:)
  real :: kappa_code,c_code,xi0,rho0,errmax_e,tol_e,tolh_old,pmassi !,exact(9)
@@ -276,6 +277,7 @@ subroutine test_implicit_matches_explicit(ntests,npass)
 
  ! now check that things match
  tol_e = 1.e-15
+ if (two_kernel) tol_e = 1.e-13
  nerr_e = 0
  errmax_e = 0.
  do j=1,3

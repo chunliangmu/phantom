@@ -123,8 +123,8 @@ module dim
 #else
  logical, parameter :: do_radiation = .false.
 #endif
- ! rhosum (two extra slots for number density and dWtilde/dh)
- integer, parameter :: maxrhosum = 41 + &
+ ! rhosum: n, dWtilde/dh, grad Wtilde copies of idivvi:idBzdzi, and of radiation fluxes
+ integer, parameter :: maxrhosum = 79 + &
                                    maxdustlarge - 1 + &
                                    radensumden
 

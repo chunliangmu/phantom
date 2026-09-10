@@ -15,9 +15,10 @@ module readwrite_infile
 !
 ! :Runtime parameters:
 !   - dumpfile : *dump file to start from*
-!   - hfact    : *h in units of particle spacing [h = hfact*n^(-1/3)]*
-!   - logfile  : *file to which output is directed*
-!   - tolh     : *tolerance on h-rho iterations*
+!   - hfact      : *h in units of particle spacing [h = hfact*n^(-1/3)]*
+!   - logfile    : *file to which output is directed*
+!   - tolh       : *tolerance on h-rho iterations*
+!   - two_kernel : *use Wtilde for number density / h*
 !
 ! :Dependencies: HIIRegion, boundary_dyn, cooling, damping, dim, dust,
 !   dust_formation, eos, externalforces, fileutils, forcing, gravwaveutils,
@@ -26,7 +27,7 @@ module readwrite_infile
 !   porosity, ptmass, ptmass_radiation, radiation_utils, shock_capturing,
 !   timestep, utils_apr, viscosity
 !
- use options,   only:iexternalforce
+ use options,   only:iexternalforce,two_kernel
  use part,      only:hfact,tolh
  use dim,       only:do_radiation,nucleation,use_dust,use_dustgrowth,mhd_nonideal,compiled_with_mcfost,&
                      inject_parts,curlv,driving,track_lum,disc_viscosity,isothermal,use_dustgrowth_coala
@@ -107,6 +108,7 @@ subroutine write_infile(infile,logfile,evfile,dumpfile,iwritein,iprint)
  call write_options_tree(iwritein)
  call write_inopt(hfact,'hfact','h in units of particle spacing [h = hfact*n^(-1/3)]',iwritein)
  call write_inopt(tolh,'tolh','tolerance on h-n iterations',iwritein,exp=.true.)
+ call write_inopt(two_kernel,'two_kernel','use Wtilde for number density / h',iwritein)
 
  call write_options_shock_capturing(iwritein)
  call write_options_damping(iwritein)
@@ -276,7 +278,7 @@ subroutine read_options_from_db(db,nerr,logfile,dumpfile,evfile)
                             use_dustgrowth,nucleation,mhd_nonideal,maxvxyzu
  use io,               only:warn
  use infile_utils,     only:inopts,read_inopt
- use options,          only:use_porosity
+ use options,          only:use_porosity,two_kernel
  use part,             only:hfact,tolh
  use eos,              only:read_options_eos
  use io_control,       only:read_options_iocontrol
@@ -321,6 +323,7 @@ subroutine read_options_from_db(db,nerr,logfile,dumpfile,evfile)
 
  call read_inopt(hfact,'hfact',db,errcount=nerr,min=1.,max=5.)
  call read_inopt(tolh,'tolh',db,errcount=nerr,min=epsilon(tolh))
+ call read_inopt(two_kernel,'two_kernel',db)
  if (tolh > 1.e-3) call warn(label,'tolh is quite large!')
 
  ! parse options internal to other code modules

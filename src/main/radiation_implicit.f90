@@ -429,11 +429,12 @@ end subroutine get_compacted_neighbour_list
 !+
 !---------------------------------------------------------
 subroutine fill_arrays(ncompact,ncompactlocal,npart,icompactmax,dt,xyzh,vxyzu,ivar,ijvar,rad,vari,varij,varij2,EU0)
- use dim,             only:periodic,ind_timesteps
+ use dim,             only:periodic,ind_timesteps,igradomega,igradzeta
  use boundary,        only:dxbound,dybound,dzbound
  use part,            only:dust_temp,nucleation,gradh,rho
  use units,           only:get_c_code
- use kernel,          only:grkern,cnormk
+ use kernel,          only:grkern,cnormk,cnormk_tilde,get_kernel_tilde
+ use options,         only:two_kernel
  integer, intent(in)  :: ncompact,ncompactlocal,icompactmax,npart
  integer, intent(in)  :: ivar(:,:),ijvar(:)
  real,    intent(in)  :: dt,xyzh(:,:),vxyzu(:,:),rad(:,:)
@@ -442,15 +443,15 @@ subroutine fill_arrays(ncompact,ncompactlocal,npart,icompactmax,dt,xyzh,vxyzu,iv
  real :: pmi,hi,hi21,hi41,rhoi,dx,dy,dz,rij2,rij,rij1,dr,dti,&
          pmj,rhoj,hj,hj21,hj41,v2i,vi,v2j,vj,dWi,dWj,&
          c_code,dWidrlightrhorhom,dWjdrlightrhorhom,&
-         xi,yi,zi,gradhi,pmjdWrijrhoi,pmjdWrunix,pmjdWruniy,pmjdWruniz,&
-         dust_kappai,dust_cooling,heatingISRi,dust_gas
+         xi,yi,zi,gradhi,zetai,pmjdWrijrhoi,pmjdWrunix,pmjdWruniy,pmjdWruniz,&
+         dust_kappai,dust_cooling,heatingISRi,dust_gas,wtilde,grkern_tilde
 
  c_code = get_c_code()
  !$omp do &
  !$omp private(n,i,j,k,rhoi,icompact,pmi,dti) &
  !$omp private(dx,dy,dz,rij2,rij,rij1,dr,pmj,rhoj,hi,hj,hi21,hj21,hi41,hj41) &
- !$omp private(v2i,vi,v2j,vj,dWi,dWj) &
- !$omp private(xi,yi,zi,gradhi,dWidrlightrhorhom,pmjdWrijrhoi,dWjdrlightrhorhom) &
+ !$omp private(v2i,vi,v2j,vj,dWi,dWj,wtilde,grkern_tilde) &
+ !$omp private(xi,yi,zi,gradhi,zetai,dWidrlightrhorhom,pmjdWrijrhoi,dWjdrlightrhorhom) &
  !$omp private(pmjdWrunix,pmjdWruniy,pmjdWruniz,dust_kappai,dust_cooling,heatingISRi,dust_gas)
 
  do n = 1,ncompact
@@ -466,7 +467,8 @@ subroutine fill_arrays(ncompact,ncompactlocal,npart,icompactmax,dt,xyzh,vxyzu,iv
        hi21 = 1./(hi*hi)
        hi41 = hi21*hi21
        rhoi = rho(i)
-       gradhi = gradh(1,i)
+       gradhi = gradh(igradomega,i)
+       zetai  = gradh(igradzeta,i)
 
        EU0(1,i) = rad(iradxi,i)
        EU0(2,i) = vxyzu(4,i)
@@ -523,8 +525,18 @@ subroutine fill_arrays(ncompact,ncompactlocal,npart,icompactmax,dt,xyzh,vxyzu,iv
           v2j = rij2*hj21
           vj = rij/hj
 
-          dWi = grkern(v2i,vi)*hi41*cnormk*gradhi
-          dWj = grkern(v2j,vj)*hj41*cnormk*gradh(1,j)
+          ! grad Wtot = grad W + (zeta/(m Omega_tilde)) grad Wtilde  (reduces to grad W/Omega when Wtilde=W)
+          dWi = grkern(v2i,vi)*hi41*cnormk
+          dWj = grkern(v2j,vj)*hj41*cnormk
+          if (two_kernel) then
+             call get_kernel_tilde(v2i,vi,wtilde,grkern_tilde)
+             dWi = dWi + (zetai*gradhi/pmj)*grkern_tilde*hi41*cnormk_tilde
+             call get_kernel_tilde(v2j,vj,wtilde,grkern_tilde)
+             dWj = dWj + (gradh(igradzeta,j)*gradh(igradomega,j)/pmi)*grkern_tilde*hj41*cnormk_tilde
+          else
+             dWi = dWi*gradhi
+             dWj = dWj*gradh(igradomega,j)
+          endif
 
           ! Coefficients for p(div(v))/rho term in gas energy equation (e.g. eq 26, Whitehouse & Bate 2004)
           dWidrlightrhorhom = c_code*dWi/dr*pmj/(rhoi*rhoj)

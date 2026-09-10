@@ -100,7 +100,7 @@ subroutine set_default_options
  iexternalforce = 0          ! external forces
  if (gr) iexternalforce = 1
  calc_erot = .false.         ! To allow rotational energies to be printed to .ev
- two_kernel = .false.        ! use a flatter kernel to set h (even neighbour counts)
+ two_kernel = .false.         ! use companion Wtilde for number-density h when true
 
  ! equation of state
  call set_defaults_eos

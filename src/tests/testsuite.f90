@@ -194,7 +194,8 @@ subroutine testsuite(string,first,last,ntests,npass,nfail)
     dosedov = .true.
  case('indtstep','ind')
     doindtstep = .true.
- case('gravity','grav','plummer','hernquist','fmm','taylorseries','directsum','plotplummer')
+ case('gravity','grav','plummer','hernquist','fmm','taylorseries','directsum','plotplummer',&
+      'maseplummer','masehernquist')
     dogravity = .true.
  case('dump','rwdump','dumprw')
     dorwdump = .true.
