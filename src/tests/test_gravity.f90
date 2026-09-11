@@ -61,7 +61,7 @@ subroutine test_gravity(ntests,npass,string)
     plot_plummer = .true.
  case('maseplummer')
     plot_mase_plummer = .true.
- case('masehernquist')
+ case('masehernquist','masehernquistfull')
     plot_mase_hernquist = .true.
  case default
     testall = .true.
@@ -1284,7 +1284,7 @@ subroutine plot_profile_mase(iprofile)
  use dim,         only:maxp,maxvxyzu,igradsoft,igradomega
  use eos,         only:gamma,polyk
  use options,     only:ieos,alpha,alphau,alphaB,tolh,two_kernel
- use part,        only:init_part,npart,xyzh,hfact,gradh,&
+ use part,        only:init_part,npart,xyzh,fxyzu,hfact,gradh,&
                        npartoftype,massoftype,istar,maxphase,iphase,isetphase
  use setup_params,only:npart_total
  use setplummer,  only:iprofile_plummer,iprofile_hernquist,profile_label,&
@@ -1297,7 +1297,9 @@ subroutine plot_profile_mase(iprofile)
  use directsum,   only:directsum_grav
  use deriv,       only:get_derivs_global
  use physcon,     only:pi
+ use timing,      only:getused
  integer, intent(in) :: iprofile
+ integer, parameter :: n_directsum_max = 2000  ! above this, reuse fxyzu (theta=0)
  integer, parameter :: n_nvals_max = 4
  integer, parameter :: n_hsoft_max = 30
  integer, parameter :: n_eta_max = 20
@@ -1310,8 +1312,9 @@ subroutine plot_profile_mase(iprofile)
  real :: tree_acc_prev
  real :: mase_w,mase_n,mase_2,mase_wv,mase_nv,mase_2v
  real :: eta_max_twok,nsamp
- logical :: two_kernel_save,write_vec
- real, allocatable :: fgrav(:,:),gradsoft_save(:)
+ real(kind=4) :: t1,t2
+ logical :: two_kernel_save,use_direct,write_vec
+ real, allocatable :: fgrav(:,:)
  character(len=128) :: file_fixed,file_adapt
  character(len=32)  :: label
 
@@ -1424,11 +1427,12 @@ subroutine plot_profile_mase(iprofile)
  do k=1,n_nvals
     npart_target = nvals(k)
     nreal = max(1, int(nsamp/real(npart_target)))
-    write(*,'(a,i8,a,i8)') ' adaptive: N=',npart_target,' nreal=',nreal
+    use_direct = (npart_target <= n_directsum_max)
+    write(*,'(a,i8,a,i8,a,l1)') ' adaptive: N=',npart_target, &
+       ' nreal=',nreal,' directsum=',use_direct
     eta_max_twok = (cnormk_tilde*real(npart_target))**(1./3.)
     write(*,'(a,1pe10.3)') '  eta_max (two-kernel) =',eta_max_twok
     allocate(fgrav(maxvxyzu,npart_target))
-    allocate(gradsoft_save(npart_target))
     do j=1,n_eta
        eta = etas(j)
        if (eta >= eta_max_twok) then
@@ -1441,10 +1445,11 @@ subroutine plot_profile_mase(iprofile)
           write(*,'(a,f5.2,a,i8,a)') '  eta=',eta,' N=',npart_target,' already done, skipping'
           cycle
        endif
-       mase_w = 0.; mase_n = 0.; mase_2 = 0.
-       mase_wv = 0.; mase_nv = 0.; mase_2v = 0.
+       call getused(t1)
+       mase_w = 0.; mase_2 = 0.
+       mase_wv = 0.; mase_2v = 0.
        do ireal=1,nreal
-          !--- one-kernel with gradsoft (dens from get_derivs; gravity via directsum)
+          !--- one-kernel with gradsoft
           two_kernel = .false.
           iseed_mc = ireal + 2000*k + j
           hfact = eta
@@ -1455,8 +1460,12 @@ subroutine plot_profile_mase(iprofile)
           npartoftype(istar) = npart
           if (maxphase==maxp) iphase(1:npart) = isetphase(istar,iactive=.true.)
           call get_derivs_global()
-          fgrav = 0.
-          call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+          if (use_direct) then
+             fgrav = 0.
+             call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+          else
+             fgrav(1:3,1:npart) = fxyzu(1:3,1:npart)
+          endif
           call accumulate_mase(npart,xyzh,fgrav,iprofile,rsoft,mass_total,&
                                ase_mag,ase_vec,fmax)
           if (fmax > tiny(fmax)) then
@@ -1464,25 +1473,16 @@ subroutine plot_profile_mase(iprofile)
              mase_wv = mase_wv + sqrt(ase_vec/(fmax*fmax))
           endif
 
-          !--- one-kernel without gradsoft
-          gradsoft_save(1:npart) = gradh(igradsoft,1:npart)
-          gradh(igradsoft,1:npart) = 0.
-          fgrav = 0.
-          call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
-          call accumulate_mase(npart,xyzh,fgrav,iprofile,rsoft,mass_total,&
-                               ase_mag,ase_vec,fmax)
-          if (fmax > tiny(fmax)) then
-             mase_n  = mase_n  + sqrt(ase_mag/(fmax*fmax))
-             mase_nv = mase_nv + sqrt(ase_vec/(fmax*fmax))
-          endif
-          gradh(igradsoft,1:npart) = real(gradsoft_save(1:npart),kind=kind(gradh))
-
           !--- two-kernel
           two_kernel = .true.
           hfact = eta
           call get_derivs_global()
-          fgrav = 0.
-          call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+          if (use_direct) then
+             fgrav = 0.
+             call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+          else
+             fgrav(1:3,1:npart) = fxyzu(1:3,1:npart)
+          endif
           call accumulate_mase(npart,xyzh,fgrav,iprofile,rsoft,mass_total,&
                                ase_mag,ase_vec,fmax)
           if (fmax > tiny(fmax)) then
@@ -1491,11 +1491,11 @@ subroutine plot_profile_mase(iprofile)
           endif
        enddo
        mase_w  = (mase_w/real(nreal))**2
-       mase_n  = (mase_n/real(nreal))**2
        mase_2  = (mase_2/real(nreal))**2
        mase_wv = (mase_wv/real(nreal))**2
-       mase_nv = (mase_nv/real(nreal))**2
        mase_2v = (mase_2v/real(nreal))**2
+       ! no-gradsoft not computed (was an extra directsum); keep 0 columns for dat layout
+       mase_n = 0.; mase_nv = 0.
        open(newunit=iunit,file=file_adapt,status='old',position='append')
        if (write_vec) then
           write(iunit,*) eta,nneigh,npart_target,mase_w,mase_n,mase_2,&
@@ -1504,12 +1504,13 @@ subroutine plot_profile_mase(iprofile)
           write(iunit,*) eta,nneigh,npart_target,mase_w,mase_n,mase_2,nreal
        endif
        close(iunit)
-       write(*,'(a,f5.2,a,1pe10.3,a,1pe10.3,a,1pe10.3,a,1pe10.3)') &
-          '  eta=',eta,' Nneigh=',nneigh,' MASE w/gs=',mase_w,' no-gs=',mase_n,' 2ker=',mase_2
+       call getused(t2)
+       write(*,'(a,f5.2,a,1pe10.3,a,1pe10.3,a,1pe10.3,a,f8.1,a)') &
+          '  eta=',eta,' Nneigh=',nneigh,' MASE w/gs=',mase_w,' 2ker=',mase_2, &
+          ' t=',real(t2-t1),'s'
        flush(6)
     enddo
     deallocate(fgrav)
-    deallocate(gradsoft_save)
  enddo
 
  two_kernel = two_kernel_save

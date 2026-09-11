@@ -1746,11 +1746,14 @@ subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
        endif
        rhomax = max(rhomax,real(rhoi))
     else
-       rhoi = rho(lli)
+       ! dens-only pass already stored Omega and zeta; reuse for Wtot fold
+       rhoi   = rho(lli)
+       gradhi = gradh(igradomega,lli)
+       zeta   = real(gradh(igradzeta,lli))
     endif
 
     if (calculate_divcurlB) then
-       gradhi = gradh(1,lli)
+       if (calculate_density) gradhi = gradh(igradomega,lli)
        rho1i  = 1./rhoi
        if (use_dust .and. .not. use_dustfrac) then
           !

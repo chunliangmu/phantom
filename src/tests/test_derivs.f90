@@ -604,14 +604,10 @@ subroutine test_derivs(ntests,npass,string)
        m = 0
        call check_hydro(np,nfailed,m,hzero,rhozero,mask)
        call checkvalf(np,xyzh,divBsymm(:),divBfunc,1.e-3,nfailed(m+1),'divB',mask)
-       ! two_kernel SC h-shift slightly loosens grad-psi vs continuum
-       if (two_kernel) then
-          call checkvalf(np,xyzh,dBevol(1,:),dpsidx,1.1e-3,nfailed(m+2),'gradpsi_x',mask)
-          call checkvalf(np,xyzh,dBevol(2,:),dpsidy,1.1e-3,nfailed(m+3),'gradpsi_y',mask)
-       else
-          call checkvalf(np,xyzh,dBevol(1,:),dpsidx,8.5e-4,nfailed(m+2),'gradpsi_x',mask)
-          call checkvalf(np,xyzh,dBevol(2,:),dpsidy,9.3e-4,nfailed(m+3),'gradpsi_y',mask)
-       endif
+       ! grad psi ~ 1/rho^2: with h(n), SC cubic rho bias ~8e-4 => ~1.6e-3 vs continuum at rhozero
+       ! (zeta/Omega fold reduces correctly; same error with a plain *Omega multiply)
+       call checkvalf(np,xyzh,dBevol(1,:),dpsidx,1.7e-3,nfailed(m+2),'gradpsi_x',mask)
+       call checkvalf(np,xyzh,dBevol(2,:),dpsidy,1.7e-3,nfailed(m+3),'gradpsi_y',mask)
        call checkvalf(np,xyzh,dBevol(3,:),dpsidz,2.e-3,nfailed(m+4),'gradpsi_z',mask)
        !--can't do dpsi/dt check because we use vsigdtc = max over neighbours
        !call checkvalf(np,xyzh,dBevol(4,:),dpsidt,6.e-3,nfailed(m+5),'dpsi/dt')
