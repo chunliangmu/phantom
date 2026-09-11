@@ -34,17 +34,20 @@ contains
 subroutine test_gravity(ntests,npass,string)
  use dim, only:gravity
  use testapr, only:setup_apr_region_for_test
+ use setplummer, only:iprofile_plummer,iprofile_hernquist
  integer,          intent(inout) :: ntests,npass
  character(len=*), intent(in)    :: string
  logical :: testdirectsum,test_mom,testtaylorseries,testall,test_plummer
- logical :: plot_plummer
+ logical :: plot_plummer,plot_mase_plummer,plot_mase_hernquist
 
- testdirectsum    = .false.
- testtaylorseries = .false.
- test_mom         = .false.
- testall          = .false.
- test_plummer     = .false.
- plot_plummer     = .false.
+ testdirectsum         = .false.
+ testtaylorseries      = .false.
+ test_mom              = .false.
+ testall               = .false.
+ test_plummer          = .false.
+ plot_plummer          = .false.
+ plot_mase_plummer     = .false.
+ plot_mase_hernquist   = .false.
  select case(string)
  case('taylorseries')
     testtaylorseries = .true.
@@ -56,6 +59,10 @@ subroutine test_gravity(ntests,npass,string)
     test_plummer = .true.
  case('plotplummer')
     plot_plummer = .true.
+ case('maseplummer')
+    plot_mase_plummer = .true.
+ case('masehernquist','masehernquistfull')
+    plot_mase_hernquist = .true.
  case default
     testall = .true.
  end select
@@ -70,6 +77,13 @@ subroutine test_gravity(ntests,npass,string)
     !
     if (testdirectsum .or. testall) call test_directsum(ntests,npass)
     !
+    !--tree_accuracy=0 vs directsum with two_kernel (guards Wtilde dsoft)
+    !
+    if (testdirectsum .or. testall) then
+       call test_profile_directsum_theta0(ntests,npass,iprofile_plummer)
+       call test_profile_directsum_theta0(ntests,npass,iprofile_hernquist)
+    endif
+    !
     !--unit tests of FMM momentum conservation
     !
     if (test_mom .or. testall) call test_FMM(ntests,npass)
@@ -81,7 +95,11 @@ subroutine test_gravity(ntests,npass,string)
     !--Plot routine of Plummer and Homogeneous sphere (store data to be plotted)
     !
     if (plot_plummer) call plot_SFMM()
-
+    !
+    !--PM07 Fig. 2 style MASE scans (fixed + adaptive cubic softening)
+    !
+    if (plot_mase_plummer) call plot_profile_mase(iprofile_plummer)
+    if (plot_mase_hernquist) call plot_profile_mase(iprofile_hernquist)
     if (id==master) write(*,"(/,a)") '<-- SELF-GRAVITY TESTS COMPLETE'
  else
     if (id==master) write(*,"(/,a)") '--> SKIPPING SELF-GRAVITY TESTS (need -DGRAVITY)'
@@ -629,6 +647,120 @@ end subroutine test_directsum
 
 !-----------------------------------------------------------------------
 !+
+!  Low-N density profile: tree_accuracy=0 forces must match directsum_grav
+!  when two_kernel is on. Fails if dsoft uses grad W instead of grad Wtilde.
+!  Uses inverse-CDF sampling (needed for cuspy Hernquist).
+!+
+!-----------------------------------------------------------------------
+subroutine test_profile_directsum_theta0(ntests,npass,iprofile)
+ use dim,         only:maxp,maxvxyzu,mpi
+ use deriv,       only:get_derivs_global
+ use eos,         only:gamma,polyk
+ use mpiutils,    only:bcast_mpi
+ use options,     only:ieos,alpha,alphau,alphaB,tolh,two_kernel
+ use part,        only:init_part,npart,xyzh,fxyzu,hfact,gradh,&
+                       npartoftype,massoftype,istar,maxphase,iphase,isetphase,&
+                       ibelong
+ use setup_params,only:npart_total
+ use testutils,   only:checkval,update_test_scores
+ use setplummer,  only:profile_label,radius_from_mass
+ use spherical,   only:iseed_mc
+ use kdtree,      only:tree_accuracy
+ use kernel,      only:hfact_default,cnormk,cnormk_tilde
+ use io,          only:id,master,iverbose
+ use directsum,   only:directsum_grav
+ use mpibalance,  only:balancedomains
+ use sort_particles, only:sort_part_id
+ use physcon,     only:pi
+ integer, intent(inout) :: ntests,npass
+ integer, intent(in)    :: iprofile
+ integer :: nfailed(3),npart_target
+ real :: rsoft,mass_total,cut_fraction,rmax,hinit
+ real :: tree_acc_prev,phitot,tol
+ logical :: two_kernel_save
+ real, allocatable :: fgrav(:,:)
+ character(len=32) :: label
+
+ label = profile_label(iprofile)
+ if (id==master) write(*,"(/,a)") &
+    '--> testing '//trim(label)//' tree_accuracy=0 vs directsum (two_kernel dsoft)'
+
+ if (abs(cnormk_tilde - cnormk) < tiny(cnormk)) then
+    if (id==master) write(*,"(1x,a)") &
+       'SKIPPING '//trim(label)//' theta0 vs directsum: Wtilde identical to W'
+    return
+ endif
+
+ two_kernel_save = two_kernel
+ tree_acc_prev = tree_accuracy
+ two_kernel = .true.
+ tree_accuracy = 0.
+ iverbose = 0
+
+ call init_part()
+ hfact = hfact_default
+ gamma = 5./3.
+ polyk = 0.
+ ieos  = 11
+ alpha  = 0.; alphau = 0.; alphaB = 0.
+ tolh = 1.e-5
+ rsoft = 1.0
+ mass_total = 1.0
+ npart_target = 300
+ cut_fraction = 0.99
+ rmax = radius_from_mass(iprofile,cut_fraction,rsoft)
+ hinit = hfact*(4.*pi/3.*rmax**3/real(npart_target))**(1./3.)
+ iseed_mc = 1
+ npart = 0
+ npart_total = 0
+ if (id==master) then
+    call sample_profile_mc(iprofile,rsoft,cut_fraction,npart_target,hinit,&
+                           xyzh,npart,npart_total)
+ endif
+ call bcast_mpi(npart_total)
+ massoftype(istar) = mass_total/real(npart_total)
+ npartoftype(istar) = npart
+ if (maxphase==maxp) then
+    iphase(1:npart) = isetphase(istar,iactive=.true.)
+ endif
+
+ ! dens + forces with fully open tree
+ call get_derivs_global()
+
+ if (mpi) then
+    ibelong(:) = 0
+    call balancedomains(npart)
+ endif
+ call sort_part_id
+
+ allocate(fgrav(maxvxyzu,max(npart,1)))
+ fgrav = 0.
+ if (id==master) call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+ call bcast_mpi(phitot)
+ call bcast_mpi(fgrav)
+
+ ! compare accelerations: tight tol so W vs Wtilde dsoft mismatch fails
+ tol = 1.e-15
+ nfailed = 0
+ if (id==master) then
+    call checkval(npart,fxyzu(1,:),fgrav(1,:),tol,nfailed(1),&
+                  'fx tree0 vs directsum ('//trim(label)//')')
+    call checkval(npart,fxyzu(2,:),fgrav(2,:),tol,nfailed(2),&
+                  'fy tree0 vs directsum ('//trim(label)//')')
+    call checkval(npart,fxyzu(3,:),fgrav(3,:),tol,nfailed(3),&
+                  'fz tree0 vs directsum ('//trim(label)//')')
+ endif
+ call update_test_scores(ntests,nfailed,npass)
+
+ deallocate(fgrav)
+ two_kernel = two_kernel_save
+ tree_accuracy = tree_acc_prev
+ if (id==master) write(*,"(/,a)") '<-- '//trim(label)//' theta0 vs directsum complete'
+
+end subroutine test_profile_directsum_theta0
+
+!-----------------------------------------------------------------------
+!+
 !   test that we conserve linear momentum with the symmetrical FMM
 !+
 !-----------------------------------------------------------------------
@@ -761,12 +893,11 @@ end subroutine test_spheres
 !+
 !-----------------------------------------------------------------------
 subroutine test_sphere(ntests,npass,iprofile)
- use dim,         only:maxp
- use deriv,       only:get_derivs_global
+ use dim,         only:maxp,maxvxyzu
  use eos,         only:gamma,polyk
  use mpiutils,    only:reduceall_mpi
- use options,     only:ieos,alpha,alphau,alphaB,tolh
- use part,        only:init_part,npart,xyzh,fxyzu,hfact,&
+ use options,     only:ieos,alpha,alphau,alphaB,tolh,two_kernel
+ use part,        only:init_part,npart,xyzh,hfact,gradh,&
                        npartoftype,massoftype,istar,maxphase,iphase,isetphase
  use setup_params,only:npart_total
  use testutils,   only:checkval,update_test_scores
@@ -777,18 +908,21 @@ subroutine test_sphere(ntests,npass,iprofile)
  use table_utils, only:linspace
  use mpidomain,   only:i_belong
  use io,          only:id,master,iverbose
+ use directsum,   only:directsum_grav
+ use deriv,       only:get_derivs_global
  integer, intent(inout) :: ntests,npass
  integer, intent(in)    :: iprofile
  integer :: nfailed(1)
  integer :: npart_target,nrealisations,i,ireal
- real :: err_sum,ref_sum,err_local,ref_local
- real :: mase,mase_tol,total_samples
+ real :: err_sum,mase,mase_tol,total_samples
  real :: rsoft,mass_total,cut_fraction
- real :: rmin,rmax,psep
- real :: acc_exact(3),diff(3)
+ real :: rmin,rmax,psep,phitot,ase_mag,ase_vec,fmax
+ real :: tree_acc_prev
+ logical :: two_kernel_save
  character(len=32) :: label
  integer, parameter :: ntab = 1000
  real :: rgrid(ntab),rhotab(ntab)
+ real, allocatable :: fgrav(:,:)
 
  label = profile_label(iprofile)
 
@@ -802,8 +936,11 @@ subroutine test_sphere(ntests,npass,iprofile)
  endif
 
  call init_part()
+ two_kernel_save = two_kernel
+ two_kernel = .false.  ! short regression uses one-kernel h(rho)
+ tree_acc_prev = tree_accuracy
+ tree_accuracy = 0.
  hfact = hfact_default
- tree_accuracy = 0.5
  gamma = 5./3.
  polyk = 0.
  ieos  = 11
@@ -824,7 +961,6 @@ subroutine test_sphere(ntests,npass,iprofile)
  psep = rmax/real(ntab) ! this is not used for random placement anyway
  iverbose = 0
  err_sum = 0.
- ref_sum = 0.
 
  do ireal=1,nrealisations
     iseed_mc = ireal
@@ -841,34 +977,27 @@ subroutine test_sphere(ntests,npass,iprofile)
     endif
 
     call get_derivs_global()
-
-    err_local = 0.
-    ref_local = 0.
-    do i=1,npart
-       call get_accel_profile(iprofile,xyzh(1:3,i),rsoft,mass_total,acc_exact)
-       diff = fxyzu(1:3,i) - acc_exact
-       err_local = err_local + dot_product(diff,diff)
-       ref_local = ref_local + dot_product(acc_exact,acc_exact)
-    enddo
-    err_local = reduceall_mpi('+',err_local)
-    ref_local = reduceall_mpi('+',ref_local)
-    if (iverbose > 0 .and. id==master) then
-       print*,' realisation ',ireal,' mase_local = ',err_local/npart
-    endif
-    err_sum = err_sum + err_local
-    ref_sum = ref_sum + ref_local
+    allocate(fgrav(maxvxyzu,npart))
+    fgrav = 0.
+    call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+    call accumulate_mase(npart,xyzh,fgrav,iprofile,rsoft,mass_total,ase_mag,ase_vec,fmax)
+    deallocate(fgrav)
+    ! match ndspmhd: accumulate L2 = sqrt(ASE/fmax^2) using magnitude residual
+    if (fmax > tiny(fmax)) err_sum = err_sum + sqrt(ase_mag/(fmax*fmax))
  enddo
 
- if (ref_sum > tiny(0.)) then
-    mase = err_sum/(nrealisations*npart_total)
- else
-    mase = 0.
- endif
+ ! plotted MASE = (mean L2)^2 as in plotsoft.f90
+ mase = err_sum/real(max(nrealisations,1))
+ mase = reduceall_mpi('+',mase)
+ mase = mase*mase
 
- mase_tol = 8.5e-4
+ mase_tol = 6.e-3
  nfailed = 0
  call checkval(mase,0.,mase_tol,nfailed(1),'MASE '//trim(label))
  call update_test_scores(ntests,nfailed,npass)
+
+ two_kernel = two_kernel_save
+ tree_accuracy = tree_acc_prev
 
 end subroutine test_sphere
 
@@ -1107,6 +1236,424 @@ subroutine copy_half_gas_particles_to_sinks(npart,nptmass,xyzh,xyzmh_ptmass,mass
  endif
 
 end subroutine copy_half_gas_particles_to_sinks
+
+!-----------------------------------------------------------------------
+!+
+!  ASE for PM07-style force tests. Returns both:
+!    ase_mag = mean (|f|-|f_exact|)^2   (splash/plotsoft magnitude residual)
+!    ase_vec = mean |f - f_exact|^2     (vector residual)
+!  Normalise later by f_max^2 (max |f_exact| at particle positions).
+!+
+!-----------------------------------------------------------------------
+subroutine accumulate_mase(np,xyzh,fgrav,iprofile,rsoft,mass_total,ase_mag,ase_vec,fmax)
+ use setplummer, only:get_accel_profile
+ integer, intent(in)  :: np,iprofile
+ real,    intent(in)  :: xyzh(:,:),fgrav(:,:),rsoft,mass_total
+ real,    intent(out) :: ase_mag,ase_vec,fmax
+ integer :: i
+ real :: acc_exact(3),dfv(3),fmag,fex,df
+
+ ase_mag = 0.
+ ase_vec = 0.
+ fmax = 0.
+ do i=1,np
+    call get_accel_profile(iprofile,xyzh(1:3,i),rsoft,mass_total,acc_exact)
+    fex = sqrt(dot_product(acc_exact,acc_exact))
+    fmag = sqrt(dot_product(fgrav(1:3,i),fgrav(1:3,i)))
+    fmax = max(fmax,fex)
+    df = fmag - fex
+    ase_mag = ase_mag + df*df
+    dfv = fgrav(1:3,i) - acc_exact
+    ase_vec = ase_vec + dot_product(dfv,dfv)
+ enddo
+ if (np > 0) then
+    ase_mag = ase_mag/real(np)
+    ase_vec = ase_vec/real(np)
+ endif
+
+end subroutine accumulate_mase
+
+!-----------------------------------------------------------------------
+!+
+!  PM07 Fig. 2 style MASE scans: fixed cubic softening vs h, and
+!  adaptive (+/- gradsoft, + two_kernel companion) vs N_neigh.
+!  iprofile = Plummer or Hernquist.
+!+
+!-----------------------------------------------------------------------
+subroutine plot_profile_mase(iprofile)
+ use dim,         only:maxp,maxvxyzu,igradsoft,igradomega
+ use eos,         only:gamma,polyk
+ use options,     only:ieos,alpha,alphau,alphaB,tolh,two_kernel
+ use part,        only:init_part,npart,xyzh,fxyzu,hfact,gradh,&
+                       npartoftype,massoftype,istar,maxphase,iphase,isetphase
+ use setup_params,only:npart_total
+ use setplummer,  only:iprofile_plummer,iprofile_hernquist,profile_label,&
+                       radius_from_mass
+ use spherical,   only:iseed_mc
+ use kdtree,      only:tree_accuracy
+ use kernel,      only:hfact_default,radkern,cnormk_tilde
+ use table_utils, only:logspace
+ use io,          only:id,master,iverbose,fatal
+ use directsum,   only:directsum_grav
+ use deriv,       only:get_derivs_global
+ use physcon,     only:pi
+ use timing,      only:getused
+ integer, intent(in) :: iprofile
+ integer, parameter :: n_directsum_max = 2000  ! above this, reuse fxyzu (theta=0)
+ integer, parameter :: n_nvals_max = 4
+ integer, parameter :: n_hsoft_max = 30
+ integer, parameter :: n_eta_max = 20
+ integer :: nvals(n_nvals_max)
+ integer :: n_nvals,n_hsoft,n_eta
+ integer :: j,k,ireal,nreal,npart_target,iunit
+ real :: rsoft,mass_total,cut_fraction,rmax,hinit
+ real :: hsoft,eta,nneigh,phitot,ase_mag,ase_vec,fmax
+ real :: hsofts(n_hsoft_max),etas(n_eta_max)
+ real :: tree_acc_prev
+ real :: mase_w,mase_n,mase_2,mase_wv,mase_nv,mase_2v
+ real :: eta_max_twok,nsamp
+ real(kind=4) :: t1,t2
+ logical :: two_kernel_save,use_direct,write_vec
+ real, allocatable :: fgrav(:,:)
+ character(len=128) :: file_fixed,file_adapt
+ character(len=32)  :: label
+
+ write_vec = .false.
+ if (id /= master) return
+ label = profile_label(iprofile)
+ write(*,"(/,a)") '--> PM07 '//trim(label)//' MASE scans'
+
+ !--- scan resolution (PM07-style)
+ n_nvals = 4
+ nvals(1:4) = (/100,1000,10000,100000/)
+ n_hsoft = 30
+ n_eta = 20
+ nsamp = 3.0e6
+ call logspace(hsofts(1:n_hsoft),1.e-3,5.0)
+ call logspace(etas(1:n_eta),0.9,2.8)
+
+ rsoft = 1.0
+ mass_total = 1.0
+ cut_fraction = 0.99   ! match ndspmhd (rmass = 0.99*ran)
+ rmax = radius_from_mass(iprofile,cut_fraction,rsoft)
+ iverbose = 0
+ tree_acc_prev = tree_accuracy
+ tree_accuracy = 0.
+ two_kernel_save = two_kernel
+ gamma = 5./3.
+ polyk = 0.
+ ieos = 11
+ alpha = 0.; alphau = 0.; alphaB = 0.
+ tolh = 1.e-5
+
+ select case(iprofile)
+ case(iprofile_plummer)
+    file_fixed = 'scripts/mase_plummer_fixed.dat'
+    file_adapt = 'scripts/mase_plummer_adaptive.dat'
+    ! preserve existing mag-only Plummer dat format / resume
+    write_vec = .false.
+ case(iprofile_hernquist)
+    file_fixed = 'scripts/mase_hernquist_fixed.dat'
+    file_adapt = 'scripts/mase_hernquist_adaptive.dat'
+    write_vec = .true.
+ case default
+    call fatal('plot_profile_mase','unknown density profile',i=iprofile)
+ end select
+
+ ! create adaptive header early so progress plots work during the fixed scan
+ call ensure_adapt_header(file_adapt,write_vec)
+
+ !---------------- fixed cubic softening ----------------
+ call init_part()
+ if (fixed_scan_complete(file_fixed,n_nvals,n_hsoft)) then
+    write(*,'(a)') ' fixed cubic: existing complete data found, skipping'
+ else
+    open(newunit=iunit,file=file_fixed,status='replace')
+    if (write_vec) then
+       write(iunit,'(a)') '# hsoft  N  mase_mag  mase_vec  nreal'
+    else
+       write(iunit,'(a)') '# hsoft  N  mase_cubic  nreal'
+    endif
+    close(iunit)
+    do k=1,n_nvals
+       npart_target = nvals(k)
+       nreal = max(1, int(nsamp/real(npart_target)))
+       write(*,'(a,i8,a,i8)') ' fixed cubic: N=',npart_target,' nreal=',nreal
+       allocate(fgrav(maxvxyzu,npart_target))
+       do j=1,n_hsoft
+          hsoft = hsofts(j)
+          mase_w = 0.
+          mase_wv = 0.
+          do ireal=1,nreal
+             iseed_mc = ireal + 1000*k
+             hinit = hfact_default*(4.*pi/3.*rmax**3/real(npart_target))**(1./3.)
+             call sample_profile_mc(iprofile,rsoft,cut_fraction,npart_target,hinit,&
+                                    xyzh,npart,npart_total)
+             massoftype(istar) = mass_total/real(npart_total)
+             npartoftype(istar) = npart
+             if (maxphase==maxp) iphase(1:npart) = isetphase(istar,iactive=.true.)
+             xyzh(4,1:npart) = hsoft
+             gradh(igradomega,1:npart) = 1.
+             gradh(igradsoft,1:npart) = 0.
+             fgrav = 0.
+             call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+             call accumulate_mase(npart,xyzh,fgrav,iprofile,rsoft,mass_total,&
+                                  ase_mag,ase_vec,fmax)
+             if (fmax > tiny(fmax)) then
+                mase_w  = mase_w  + sqrt(ase_mag/(fmax*fmax))
+                mase_wv = mase_wv + sqrt(ase_vec/(fmax*fmax))
+             endif
+          enddo
+          mase_w  = (mase_w/real(nreal))**2
+          mase_wv = (mase_wv/real(nreal))**2
+          open(newunit=iunit,file=file_fixed,status='old',position='append')
+          if (write_vec) then
+             write(iunit,*) hsoft,npart_target,mase_w,mase_wv,nreal
+          else
+             write(iunit,*) hsoft,npart_target,mase_w,nreal
+          endif
+          close(iunit)
+          write(*,'(a,1pe10.3,a,i8,a,1pe10.3,a,1pe10.3)') &
+             '  h=',hsoft,' N=',npart_target,' MASE_mag=',mase_w,' MASE_vec=',mase_wv
+          flush(6)
+       enddo
+       deallocate(fgrav)
+    enddo
+ endif
+
+ !---------------- adaptive cubic (+ companion) ----------------
+ call ensure_adapt_header(file_adapt,write_vec)
+ call init_part()
+ do k=1,n_nvals
+    npart_target = nvals(k)
+    nreal = max(1, int(nsamp/real(npart_target)))
+    use_direct = (npart_target <= n_directsum_max)
+    write(*,'(a,i8,a,i8,a,l1)') ' adaptive: N=',npart_target, &
+       ' nreal=',nreal,' directsum=',use_direct
+    eta_max_twok = (cnormk_tilde*real(npart_target))**(1./3.)
+    write(*,'(a,1pe10.3)') '  eta_max (two-kernel) =',eta_max_twok
+    allocate(fgrav(maxvxyzu,npart_target))
+    do j=1,n_eta
+       eta = etas(j)
+       if (eta >= eta_max_twok) then
+          write(*,'(a,f5.2,a,1pe10.3,a)') '  eta=',eta, &
+             ' >= eta_max=',eta_max_twok,' (no two-kernel dens root), stopping N scan'
+          exit
+       endif
+       nneigh = 4./3.*pi*(radkern*eta)**3
+       if (adapt_point_exists(file_adapt,eta,npart_target)) then
+          write(*,'(a,f5.2,a,i8,a)') '  eta=',eta,' N=',npart_target,' already done, skipping'
+          cycle
+       endif
+       call getused(t1)
+       mase_w = 0.; mase_2 = 0.
+       mase_wv = 0.; mase_2v = 0.
+       do ireal=1,nreal
+          !--- one-kernel with gradsoft
+          two_kernel = .false.
+          iseed_mc = ireal + 2000*k + j
+          hfact = eta
+          hinit = eta*(4.*pi/3.*rmax**3/real(npart_target))**(1./3.)
+          call sample_profile_mc(iprofile,rsoft,cut_fraction,npart_target,hinit,&
+                                 xyzh,npart,npart_total)
+          massoftype(istar) = mass_total/real(npart_total)
+          npartoftype(istar) = npart
+          if (maxphase==maxp) iphase(1:npart) = isetphase(istar,iactive=.true.)
+          call get_derivs_global()
+          if (use_direct) then
+             fgrav = 0.
+             call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+          else
+             fgrav(1:3,1:npart) = fxyzu(1:3,1:npart)
+          endif
+          call accumulate_mase(npart,xyzh,fgrav,iprofile,rsoft,mass_total,&
+                               ase_mag,ase_vec,fmax)
+          if (fmax > tiny(fmax)) then
+             mase_w  = mase_w  + sqrt(ase_mag/(fmax*fmax))
+             mase_wv = mase_wv + sqrt(ase_vec/(fmax*fmax))
+          endif
+
+          !--- two-kernel
+          two_kernel = .true.
+          hfact = eta
+          call get_derivs_global()
+          if (use_direct) then
+             fgrav = 0.
+             call directsum_grav(xyzh,gradh,fgrav,phitot,npart)
+          else
+             fgrav(1:3,1:npart) = fxyzu(1:3,1:npart)
+          endif
+          call accumulate_mase(npart,xyzh,fgrav,iprofile,rsoft,mass_total,&
+                               ase_mag,ase_vec,fmax)
+          if (fmax > tiny(fmax)) then
+             mase_2  = mase_2  + sqrt(ase_mag/(fmax*fmax))
+             mase_2v = mase_2v + sqrt(ase_vec/(fmax*fmax))
+          endif
+       enddo
+       mase_w  = (mase_w/real(nreal))**2
+       mase_2  = (mase_2/real(nreal))**2
+       mase_wv = (mase_wv/real(nreal))**2
+       mase_2v = (mase_2v/real(nreal))**2
+       ! no-gradsoft not computed (was an extra directsum); keep 0 columns for dat layout
+       mase_n = 0.; mase_nv = 0.
+       open(newunit=iunit,file=file_adapt,status='old',position='append')
+       if (write_vec) then
+          write(iunit,*) eta,nneigh,npart_target,mase_w,mase_n,mase_2,&
+             mase_wv,mase_nv,mase_2v,nreal
+       else
+          write(iunit,*) eta,nneigh,npart_target,mase_w,mase_n,mase_2,nreal
+       endif
+       close(iunit)
+       call getused(t2)
+       write(*,'(a,f5.2,a,1pe10.3,a,1pe10.3,a,1pe10.3,a,f8.1,a)') &
+          '  eta=',eta,' Nneigh=',nneigh,' MASE w/gs=',mase_w,' 2ker=',mase_2, &
+          ' t=',real(t2-t1),'s'
+       flush(6)
+    enddo
+    deallocate(fgrav)
+ enddo
+
+ two_kernel = two_kernel_save
+ tree_accuracy = tree_acc_prev
+ write(*,'(a)') ' wrote '//trim(file_fixed)
+ write(*,'(a)') ' wrote '//trim(file_adapt)
+ write(*,"(/,a)") '<-- PM07 '//trim(label)//' MASE scans complete'
+
+end subroutine plot_profile_mase
+
+!-----------------------------------------------------------------------
+!+
+!  Place equal-mass particles by inverse CDF r(M), matching ndspmhd
+!  setup_densityprofileND (rmass = cut*ran2; independent particles).
+!  Needed for cuspy Hernquist: stretchmap density tables cannot start at r=0.
+!+
+!-----------------------------------------------------------------------
+subroutine sample_profile_mc(iprofile,rsoft,cut_fraction,nreq,hinit,xyzh,np,nptot)
+ use random,     only:ran2
+ use spherical,  only:iseed_mc
+ use setplummer, only:radius_from_mass
+ use physcon,    only:pi
+ integer,         intent(in)    :: iprofile,nreq
+ real,            intent(in)    :: rsoft,cut_fraction,hinit
+ real,            intent(out)   :: xyzh(:,:)
+ integer,         intent(out)   :: np
+ integer(kind=8), intent(out)   :: nptot
+ integer :: i,maxp
+ real    :: rmass,rr,phi,costheta,sintheta,sinphi,cosphi,dir(3)
+
+ maxp = size(xyzh,2)
+ np = 0
+ do i=1,nreq
+    if (np >= maxp) exit
+    ! mass fraction in (0, cut], same as ndspmhd: rmass = 0.99*ran2
+    rmass = cut_fraction*ran2(iseed_mc)
+    if (rmass <= 0.) rmass = cut_fraction*ran2(iseed_mc)
+    rr = radius_from_mass(iprofile,rmass,rsoft)
+    phi = 2.*pi*(ran2(iseed_mc) - 0.5)
+    costheta = 2.*ran2(iseed_mc) - 1.
+    sintheta = sqrt(max(0., 1. - costheta*costheta))
+    sinphi = sin(phi)
+    cosphi = cos(phi)
+    dir = (/sintheta*cosphi, sintheta*sinphi, costheta/)
+    np = np + 1
+    xyzh(1:3,np) = rr*dir
+    xyzh(4,np) = hinit
+ enddo
+ nptot = int(np,kind=8)
+
+end subroutine sample_profile_mc
+
+!-----------------------------------------------------------------------
+!+
+!  True if fixed MASE file already has n_n x n_h data rows
+!+
+!-----------------------------------------------------------------------
+logical function fixed_scan_complete(filename,n_n,n_h)
+ character(len=*), intent(in) :: filename
+ integer,          intent(in) :: n_n,n_h
+ integer :: iunit,ierr,nlines
+ character(len=256) :: line
+ logical :: ex
+
+ fixed_scan_complete = .false.
+ inquire(file=filename,exist=ex)
+ if (.not.ex) return
+ open(newunit=iunit,file=filename,status='old',action='read',iostat=ierr)
+ if (ierr /= 0) return
+ nlines = 0
+ do
+    read(iunit,'(a)',iostat=ierr) line
+    if (ierr /= 0) exit
+    if (len_trim(line) == 0) cycle
+    if (line(1:1) == '#') cycle
+    nlines = nlines + 1
+ enddo
+ close(iunit)
+ fixed_scan_complete = (nlines >= n_n*n_h)
+
+end function fixed_scan_complete
+
+!-----------------------------------------------------------------------
+!+
+!  Ensure adaptive MASE file exists with a header (do not wipe data)
+!+
+!-----------------------------------------------------------------------
+subroutine ensure_adapt_header(filename,write_vec)
+ character(len=*), intent(in) :: filename
+ logical,          intent(in) :: write_vec
+ integer :: iunit,ierr
+ logical :: ex
+
+ inquire(file=filename,exist=ex)
+ if (ex) return
+ open(newunit=iunit,file=filename,status='new',iostat=ierr)
+ if (ierr /= 0) return
+ if (write_vec) then
+    write(iunit,'(a)') '# eta  Nneigh  N  mase_gs_mag  mase_nogs_mag  mase_two_mag'// &
+       '  mase_gs_vec  mase_nogs_vec  mase_two_vec  nreal'
+ else
+    write(iunit,'(a)') '# eta  Nneigh  N  mase_with_gradsoft  mase_no_gradsoft'// &
+       '  mase_two_kernel  nreal'
+ endif
+ close(iunit)
+
+end subroutine ensure_adapt_header
+
+!-----------------------------------------------------------------------
+!+
+!  True if this (eta,N) adaptive point is already in the data file
+!+
+!-----------------------------------------------------------------------
+logical function adapt_point_exists(filename,eta,npart_target)
+ character(len=*), intent(in) :: filename
+ real,             intent(in) :: eta
+ integer,          intent(in) :: npart_target
+ integer :: iunit,ierr,n_read
+ real    :: eta_r,nneigh_r
+ character(len=256) :: line
+ logical :: ex
+
+ adapt_point_exists = .false.
+ inquire(file=filename,exist=ex)
+ if (.not.ex) return
+ open(newunit=iunit,file=filename,status='old',action='read',iostat=ierr)
+ if (ierr /= 0) return
+ do
+    read(iunit,'(a)',iostat=ierr) line
+    if (ierr /= 0) exit
+    if (len_trim(line) == 0) cycle
+    if (line(1:1) == '#') cycle
+    ! only need eta and N; works for old (7-col) and new (10-col) layouts
+    read(line,*,iostat=ierr) eta_r,nneigh_r,n_read
+    if (ierr /= 0) cycle
+    if (n_read == npart_target .and. abs(eta_r-eta) <= 1.e-6*max(1.,abs(eta))) then
+       adapt_point_exists = .true.
+       exit
+    endif
+ enddo
+ close(iunit)
+
+end function adapt_point_exists
 
 !-----------------------------------------------------------------------
 !+

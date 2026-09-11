@@ -42,9 +42,9 @@ module densityforce
        ifxi = 8, &
        ifyi = 9, &
        ifzi = 10, &
-       iBevolxi = 11, &
-       iBevolyi = 12, &
-       iBevolzi = 13, &
+       iBxi = 11, &
+       iByi = 12, &
+       iBzi = 13, &
        ipsi = 14, &
        irhoi_xpart = 15, &
        iradxii = 16
@@ -95,7 +95,11 @@ module densityforce
        iradfyi          = irhodustiend + 2, &
        iradfzi          = irhodustiend + 3, &
        ini              = iradfzi + 1, &
-       igradhni         = iradfzi + 2
+       igradhni         = iradfzi + 2, &
+       idivvti          = iradfzi + 3, &  ! grad Wtilde copies of idivvi:idBzdzi (no mass)
+       iradfxti         = idivvti + (idBzdzi - idivvi + 1), &  ! grad Wtilde radiation fluxes
+       iradfyti         = iradfxti + 1, &
+       iradfzt          = iradfxti + 2
 
  !--kernel related parameters
  !real, parameter    :: cnormk = 1./pi, wab0 = 1., gradh0 = -3.*wab0, radkern2 = 4F.0
@@ -125,7 +129,7 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
  use neighkdtree, only:leaf_is_active,ncells,get_neighbour_list,get_hmaxcell,&
                      listneigh,get_cell_location,set_hmaxcell,sync_hmax_mpi
  use part,        only:mhd,get_partinfo,iactive,&
-                       iphase,igas,idust,iamgas,periodic,all_active,dustfrac
+                       iphase,igas,idust,iamgas,periodic,all_active,dustfrac,rho,Bxyz
  use mpiutils,    only:reduceall_mpi,barrier_mpi,reduce_mpi,reduceall_mpi
  use mpimemory,   only:reserve_stack,swap_stacks,reset_stacks,write_cell
  use mpimemory,   only:stack_remote  => dens_stack_1
@@ -207,6 +211,20 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
  getdv = ((maxalpha==maxp .or. curlv) .and. (icall <= 1 .or. icall==3)) .or. &
          (maxdvdx==maxp .and. (use_dust .or. realviscosity .or. gr))
  getdB = (mhd .and. (ndivcurlB >= 4 .or. mhd_nonideal))
+
+ ! Freeze B = (B/rho)*rho for the grad B sums, then pack into xpartveci
+ ! (iBxi:iBzi) in start_cell for MPI. Using live rho(j) while rho is
+ ! updated in parallel (fast_divcurlB) makes Bevol*rho inconsistent across
+ ! pairs; two_kernel amplifies this because h/rho still shift on the dens pass.
+ if (getdB) then
+    !$omp parallel do default(none) shared(npart,Bevol,rho,Bxyz) private(i)
+    do i=1,npart
+       Bxyz(1,i) = Bevol(1,i)*rho(i)
+       Bxyz(2,i) = Bevol(2,i)*rho(i)
+       Bxyz(3,i) = Bevol(3,i)*rho(i)
+    enddo
+    !$omp end parallel do
+ endif
 
  if ( all_active ) stressmax  = 0.   ! condition is required for independent timestepping
 
@@ -598,8 +616,9 @@ subroutine init_rho_from_h(npart,xyzh,apr_level)
 !$omp shared(npart,xyzh,rho,iphase,apr_level,maxp,maxphase,massoftype,aprmassoftype) &
 !$omp private(i,itype,pmassi)
  do i = 1,npart
-    ! skip particles with a known density, and dead or accreted particles
-    if (isdead_or_accreted(xyzh(4,i))) cycle
+    ! only seed rho from h when unknown; never overwrite a kernel-summed mass density
+    ! (critical for two_kernel, where rhoh(h) from n-based h is not the mass density)
+    if (isdead_or_accreted(xyzh(4,i)) .or. rho(i) > 0.) cycle
     itype = igas
     if (maxphase==maxp) itype = iamtype(iphase(i))
     if (use_apr) then
@@ -629,7 +648,7 @@ pure subroutine get_density_sums(i,xpartveci,hi,hi1,hi21,iamtypei,iamgasi,iamdus
  use boundary, only:dxbound,dybound,dzbound
 #endif
  use kernel,   only:get_kernel,get_kernel_grav1,get_kernel_tilde
- use part,     only:iphase,iamgas,iamdust,iamtype,maxphase,ibasetype,igas,idust,rho
+ use part,     only:iphase,iamgas,iamdust,iamtype,maxphase,ibasetype,igas,idust,rho,Bxyz
  use part,     only:massoftype,iradxi,aprmassoftype
  use dim,      only:gravity,maxp,nalpha,use_dust,do_radiation,use_apr,maxpsph,curlv
  use options,  only:implicit_radiation,two_kernel
@@ -659,6 +678,8 @@ pure subroutine get_density_sums(i,xpartveci,hi,hi1,hi21,iamtypei,iamgasi,iamdus
  real                        :: rij2,rij,rij1,q2i,qi,q2prev,rij1grkern
  real                        :: wabi,grkerni,dwdhi,dphidhi
  real                        :: wtilde,grkern_tilde,dwdhi_n
+ real                        :: runix_t,runiy_t,runiz_t
+ integer, parameter          :: itilde = idivvti - idivvi
  real                        :: projv,dvx,dvy,dvz,dax,day,daz
  real                        :: projdB,dBx,dBy,dBz,fxi,fyi,fzi,fxj,fyj,fzj
  real                        :: rhoi, rhoj,pmassi,pmassj
@@ -815,6 +836,10 @@ pure subroutine get_density_sums(i,xpartveci,hi,hi1,hi21,iamtypei,iamgasi,iamdus
              runix = dx*rij1grkern*pmassj
              runiy = dy*rij1grkern*pmassj
              runiz = dz*rij1grkern*pmassj
+             ! Wtilde pair vector: no m_b (cancels with 1/m_b in grad Wtot)
+             runix_t = dx*rij1*grkern_tilde
+             runiy_t = dy*rij1*grkern_tilde
+             runiz_t = dz*rij1*grkern_tilde
 
              if (getdv) then
                 !--get dv and den
@@ -823,17 +848,12 @@ pure subroutine get_density_sums(i,xpartveci,hi,hi1,hi21,iamtypei,iamgasi,iamdus
                 dvz = xpartveci(ivzi) - vxyzu(3,j)
                 projv = dvx*runix + dvy*runiy + dvz*runiz
                 rhosum(idivvi) = rhosum(idivvi) + projv
+                rhosum(idivvi+itilde) = rhosum(idivvi+itilde) + dvx*runix_t + dvy*runiy_t + dvz*runiz_t
 
                 if (maxdvdx > 0 .or. curlv .or. nalpha > 1) then
-                   rhosum(idvxdxi) = rhosum(idvxdxi) + dvx*runix
-                   rhosum(idvxdyi) = rhosum(idvxdyi) + dvx*runiy
-                   rhosum(idvxdzi) = rhosum(idvxdzi) + dvx*runiz
-                   rhosum(idvydxi) = rhosum(idvydxi) + dvy*runix
-                   rhosum(idvydyi) = rhosum(idvydyi) + dvy*runiy
-                   rhosum(idvydzi) = rhosum(idvydzi) + dvy*runiz
-                   rhosum(idvzdxi) = rhosum(idvzdxi) + dvz*runix
-                   rhosum(idvzdyi) = rhosum(idvzdyi) + dvz*runiy
-                   rhosum(idvzdzi) = rhosum(idvzdzi) + dvz*runiz
+                   call add_grad3(rhosum,idvxdxi,dvx,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
+                   call add_grad3(rhosum,idvydxi,dvy,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
+                   call add_grad3(rhosum,idvzdxi,dvz,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
 
                    if (nalpha > 1 .and. gas_gas) then
                       !--divergence of acceleration for Cullen & Dehnen switch
@@ -844,15 +864,9 @@ pure subroutine get_density_sums(i,xpartveci,hi,hi1,hi21,iamtypei,iamgasi,iamdus
                       day = fyi - fyj
                       daz = fzi - fzj
 
-                      rhosum(idaxdxi) = rhosum(idaxdxi) + dax*runix
-                      rhosum(idaxdyi) = rhosum(idaxdyi) + dax*runiy
-                      rhosum(idaxdzi) = rhosum(idaxdzi) + dax*runiz
-                      rhosum(idaydxi) = rhosum(idaydxi) + day*runix
-                      rhosum(idaydyi) = rhosum(idaydyi) + day*runiy
-                      rhosum(idaydzi) = rhosum(idaydzi) + day*runiz
-                      rhosum(idazdxi) = rhosum(idazdxi) + daz*runix
-                      rhosum(idazdyi) = rhosum(idazdyi) + daz*runiy
-                      rhosum(idazdzi) = rhosum(idazdzi) + daz*runiz
+                      call add_grad3(rhosum,idaxdxi,dax,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
+                      call add_grad3(rhosum,idaydxi,day,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
+                      call add_grad3(rhosum,idazdxi,daz,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
                    endif
                    rhosum(irxxi) = rhosum(irxxi) - dx*runix
                    rhosum(irxyi) = rhosum(irxyi) - dx*runiy
@@ -860,42 +874,44 @@ pure subroutine get_density_sums(i,xpartveci,hi,hi1,hi21,iamtypei,iamgasi,iamdus
                    rhosum(iryyi) = rhosum(iryyi) - dy*runiy
                    rhosum(iryzi) = rhosum(iryzi) - dy*runiz
                    rhosum(irzzi) = rhosum(irzzi) - dz*runiz
+                   rhosum(irxxi+itilde) = rhosum(irxxi+itilde) - dx*runix_t
+                   rhosum(irxyi+itilde) = rhosum(irxyi+itilde) - dx*runiy_t
+                   rhosum(irxzi+itilde) = rhosum(irxzi+itilde) - dx*runiz_t
+                   rhosum(iryyi+itilde) = rhosum(iryyi+itilde) - dy*runiy_t
+                   rhosum(iryzi+itilde) = rhosum(iryzi+itilde) - dy*runiz_t
+                   rhosum(irzzi+itilde) = rhosum(irzzi+itilde) - dz*runiz_t
 
                 endif
              endif
 
              if (getdB .and. gas_gas) then
-                ! we need B instead of B/rho, so used our estimated h here
-                ! either it is close enough to be converged,
-                ! or worst case it runs another iteration and re-calculates
-                rhoi = xpartveci(irhoi_xpart)
-                rhoj = rho(j)
-                dBx = xpartveci(iBevolxi)*rhoi - Bevol(1,j)*rhoj
-                dBy = xpartveci(iBevolyi)*rhoi - Bevol(2,j)*rhoj
-                dBz = xpartveci(iBevolzi)*rhoi - Bevol(3,j)*rhoj
+                ! Bi from xpartveci (MPI-safe); Bj from Bxyz frozen at dens start
+                dBx = xpartveci(iBxi) - Bxyz(1,j)
+                dBy = xpartveci(iByi) - Bxyz(2,j)
+                dBz = xpartveci(iBzi) - Bxyz(3,j)
                 projdB = dBx*runix + dBy*runiy + dBz*runiz
 
                 ! difference operator of divB
                 rhosum(idivBi) = rhosum(idivBi) + projdB
+                rhosum(idivBi+itilde) = rhosum(idivBi+itilde) + dBx*runix_t + dBy*runiy_t + dBz*runiz_t
 
-                rhosum(idBxdxi) = rhosum(idBxdxi) + dBx*runix
-                rhosum(idBxdyi) = rhosum(idBxdyi) + dBx*runiy
-                rhosum(idBxdzi) = rhosum(idBxdzi) + dBx*runiz
-                rhosum(idBydxi) = rhosum(idBydxi) + dBy*runix
-                rhosum(idBydyi) = rhosum(idBydyi) + dBy*runiy
-                rhosum(idBydzi) = rhosum(idBydzi) + dBy*runiz
-                rhosum(idBzdxi) = rhosum(idBzdxi) + dBz*runix
-                rhosum(idBzdyi) = rhosum(idBzdyi) + dBz*runiy
-                rhosum(idBzdzi) = rhosum(idBzdzi) + dBz*runiz
+                call add_grad3(rhosum,idBxdxi,dBx,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
+                call add_grad3(rhosum,idBydxi,dBy,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
+                call add_grad3(rhosum,idBzdxi,dBz,runix,runiy,runiz,runix_t,runiy_t,runiz_t,itilde)
              endif
 
              if (do_radiation .and. gas_gas .and. .not. implicit_radiation) then
+                ! rhoi from dens-start pack in xpartveci (MPI-safe; frozen like B)
                 rhoi = xpartveci(irhoi_xpart)
                 rhoj = rho(j)
                 dradenij = rad(iradxi,j)*rhoj - xpartveci(iradxii)*rhoi
                 rhosum(iradfxi) = rhosum(iradfxi) + dradenij*runix
                 rhosum(iradfyi) = rhosum(iradfyi) + dradenij*runiy
                 rhosum(iradfzi) = rhosum(iradfzi) + dradenij*runiz
+                ! Wtilde pair vector (no m_b) for grad Wtot fold after zeta is known
+                rhosum(iradfxti) = rhosum(iradfxti) + dradenij*runix_t
+                rhosum(iradfyti) = rhosum(iradfyti) + dradenij*runiy_t
+                rhosum(iradfzt)  = rhosum(iradfzt)  + dradenij*runiz_t
              endif
 
           endif
@@ -1048,6 +1064,45 @@ pure subroutine calculate_divcurlB_from_sums(rhosum,termnorm,divcurlBi,ndivcurlB
  endif
 
 end subroutine calculate_divcurlB_from_sums
+
+!----------------------------------------------------------------
+!+
+!  Add one vector-component gradient to the W and Wtilde sums
+!+
+!----------------------------------------------------------------
+pure subroutine add_grad3(rhosum,i0,q,rx,ry,rz,rxt,ryt,rzt,it)
+ real,    intent(inout) :: rhosum(:)
+ integer, intent(in)    :: i0,it
+ real,    intent(in)    :: q,rx,ry,rz,rxt,ryt,rzt
+
+ rhosum(i0)     = rhosum(i0)     + q*rx
+ rhosum(i0+1)   = rhosum(i0+1)   + q*ry
+ rhosum(i0+2)   = rhosum(i0+2)   + q*rz
+ rhosum(i0+it)  = rhosum(i0+it)  + q*rxt
+ rhosum(i0+it+1)= rhosum(i0+it+1)+ q*ryt
+ rhosum(i0+it+2)= rhosum(i0+it+2)+ q*rzt
+
+end subroutine add_grad3
+
+!----------------------------------------------------------------
+!+
+!  Fold grad Wtilde sums into the grad W sums using zeta/Omega_tilde
+!  so later normalisation is just C/(rho h^4) with no extra 1/Omega_tilde
+!+
+!----------------------------------------------------------------
+pure subroutine fold_wtot_sums(rhosum,zeta,inv_omegat,cnorm_t)
+ real, intent(inout) :: rhosum(:)
+ real, intent(in)    :: zeta,inv_omegat,cnorm_t
+ integer :: k,it
+ real    :: fac_t
+
+ it = idivvti - idivvi
+ fac_t = zeta*inv_omegat*cnorm_t/cnormk
+ do k=idivvi,idBzdzi
+    rhosum(k) = rhosum(k) + fac_t*rhosum(k+it)
+ enddo
+
+end subroutine fold_wtot_sums
 
 !----------------------------------------------------------------
 !+
@@ -1360,7 +1415,7 @@ subroutine start_cell(cell,iphase,xyzh,vxyzu,fxyzu,fext,Bevol,rad,apr_level)
  use io,          only:fatal
  use dim,         only:maxp,maxvxyzu,do_radiation,use_apr,maxpsph
  use part,        only:maxphase,get_partinfo,mhd,igas,iamgas,&
-                       iamboundary,ibasetype,iradxi,rho
+                       iamboundary,ibasetype,iradxi,rho,Bxyz
 
  type(celldens),  intent(inout) :: cell
  integer(kind=1), intent(in)    :: iphase(:)
@@ -1422,16 +1477,18 @@ subroutine start_cell(cell,iphase,xyzh,vxyzu,fxyzu,fext,Bevol,rad,apr_level)
 
     if (mhd) then
        if (iamgasi) then
-          cell%xpartvec(iBevolxi,cell%npcell) = Bevol(1,i)
-          cell%xpartvec(iBevolyi,cell%npcell) = Bevol(2,i)
-          cell%xpartvec(iBevolzi,cell%npcell) = Bevol(3,i)
+          ! pack frozen B (= Bevol*rho at dens start) so remote MPI cells
+          ! carry Bi; neighbour j uses local Bxyz(j)
+          cell%xpartvec(iBxi,cell%npcell) = Bxyz(1,i)
+          cell%xpartvec(iByi,cell%npcell) = Bxyz(2,i)
+          cell%xpartvec(iBzi,cell%npcell) = Bxyz(3,i)
           cell%xpartvec(ipsi,cell%npcell)     = Bevol(4,i)
        else
-          cell%xpartvec(iBevolxi:ipsi,cell%npcell)   = 0. ! to avoid compiler warning
+          cell%xpartvec(iBxi:ipsi,cell%npcell)   = 0. ! to avoid compiler warning
        endif
     endif
 
-    cell%xpartvec(irhoi_xpart,cell%npcell) = rho(i)
+    cell%xpartvec(irhoi_xpart,cell%npcell) = rho(i)  ! dens-start rho for radiation (not updated with h)
     if (do_radiation) cell%xpartvec(iradxii,cell%npcell) = rad(iradxi,i)
 
     if (use_apr) then
@@ -1477,7 +1534,6 @@ subroutine finish_cell(cell,cell_converged)
        iamtypei = igas
        iamgasi  = .true.
     endif
-    !if (.not.iactivei) print*,' ERROR: should be no inactive particles here',iamtypei,iactivei
 
     apri = cell%apr(i)
     if (use_apr) then
@@ -1600,10 +1656,10 @@ subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
  use io,          only:fatal,real4
  use dim,         only:maxp,ndivcurlB,nalpha,use_dust,do_radiation,use_apr,gravity,&
                        igradomega,igradzeta,igradsoft
- use options,     only:use_dustfrac,implicit_radiation
+ use options,     only:use_dustfrac,implicit_radiation,two_kernel
  use viscosity,   only:bulkvisc,shearparam
  use neighkdtree, only:set_hmaxcell
- use kernel,      only:radkern
+ use kernel,      only:radkern,cnormk,cnormk_tilde
  use kdtree,      only:inodeparts
 
  integer,         intent(in)    :: icall
@@ -1690,11 +1746,14 @@ subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
        endif
        rhomax = max(rhomax,real(rhoi))
     else
-       rhoi = rho(lli)
+       ! dens-only pass already stored Omega and zeta; reuse for Wtot fold
+       rhoi   = rho(lli)
+       gradhi = gradh(igradomega,lli)
+       zeta   = real(gradh(igradzeta,lli))
     endif
 
     if (calculate_divcurlB) then
-       gradhi = gradh(1,lli)
+       if (calculate_density) gradhi = gradh(igradomega,lli)
        rho1i  = 1./rhoi
        if (use_dust .and. .not. use_dustfrac) then
           !
@@ -1715,7 +1774,14 @@ subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
        !
        igotrmatrix = .false.
 
-       term = cnormk*gradhi*rho1i*hi41
+       ! grad Wtot = grad W + (zeta/Omega_tilde) grad Wtilde; fold the two sums now that zeta and Omega_tilde are known
+       ! when two_kernel=false, tilde sums used the mass kernel so cnorm_t = cnormk
+       if (two_kernel) then
+          call fold_wtot_sums(rhosum,zeta,real(gradhi),cnormk_tilde)
+       else
+          call fold_wtot_sums(rhosum,zeta,real(gradhi),cnormk)
+       endif
+       term = cnormk*rho1i*hi41
        if (getdv) then
           ndivcurlv = size(divcurlv,dim=1)
           call calculate_rmatrix_from_sums(rhosum,denom,rmatrix,igotrmatrix)
@@ -1738,11 +1804,11 @@ subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
           endif
        endif
        !
-       !--get strain tensor from summations
+       !--get strain tensor from summations (must use folded rhosum = grad Wtot sums)
        !
        if (maxdvdx==maxp .and. getdv) then
-          if (.not.igotrmatrix) call calculate_rmatrix_from_sums(cell%rhosums(:,i),denom,rmatrix,igotrmatrix)
-          call calculate_strain_from_sums(cell%rhosums(:,i),term,denom,rmatrix,dvdxi,.not.realviscosity)
+          if (.not.igotrmatrix) call calculate_rmatrix_from_sums(rhosum,denom,rmatrix,igotrmatrix)
+          call calculate_strain_from_sums(rhosum,term,denom,rmatrix,dvdxi,.not.realviscosity)
           ! check for negative stresses to prevent tensile instability
           if (realviscosity) call get_max_stress(dvdxi,divcurlvi(1),rho1i,stressmax,shearparam,bulkvisc)
           ! store strain tensor
@@ -1750,7 +1816,15 @@ subroutine store_results(icall,cell,getdv,getdb,realviscosity,stressmax,xyzh,&
        endif
 
        if (do_radiation .and. iamgasi .and. .not. implicit_radiation) then
-          radprop(ifluxx:ifluxz,lli) = cell%rhosums(iradfxi:iradfzi,i)*term
+          ! fold radiation fluxes onto grad Wtot (same zeta/Omega factor as hydro sums)
+          if (two_kernel) then
+             rhosum(iradfxi:iradfzi) = rhosum(iradfxi:iradfzi) &
+                + zeta*real(gradhi)*cnormk_tilde/cnormk * rhosum(iradfxti:iradfzt)
+          else
+             rhosum(iradfxi:iradfzi) = rhosum(iradfxi:iradfzi) &
+                + zeta*real(gradhi) * rhosum(iradfxti:iradfzt)
+          endif
+          radprop(ifluxx:ifluxz,lli) = rhosum(iradfxi:iradfzi)*term
        endif
     endif
 

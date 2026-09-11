@@ -40,7 +40,7 @@ subroutine test_derivs(ntests,npass,string)
  use eos,          only:polyk,gamma,init_eos
  use io,           only:iprint,id,master,fatal,iverbose,nprocs
  use mpiutils,     only:reduceall_mpi
- use options,      only:alpha,alphaB,ieos,use_dustfrac,iopacity_type
+ use options,      only:alpha,alphaB,ieos,use_dustfrac,iopacity_type,two_kernel
  use kernel,       only:radkern,kernelname
  use part,         only:npart,npartoftype,igas,xyzh,hfact,tolh,vxyzu,fxyzu,init_part,&
                         divcurlv,divcurlB,divBsymm,Bevol,dBevol,&
@@ -199,7 +199,7 @@ subroutine test_derivs(ntests,npass,string)
     !--check hydro quantities come out as they should do
     !
     nfailed(:) = 0; m=0
-    call check_hydro(np,nfailed,m,hzero,mask)
+    call check_hydro(np,nfailed,m,hzero,rhozero,mask)
     if (.not.isothermal) call check_fxyzu(np,nfailed,m,mask)
     !
     !--also check that the number of neighbours is correct
@@ -210,7 +210,9 @@ subroutine test_derivs(ntests,npass,string)
        realneigh = 4./3.*pi*(hfact*radkern)**3
        call checkval(actualmean,real(int(realneigh)),2.e-16,nfailed(11),'mean nneigh',thread_id=id)
        call checkval(maxactual,int(realneigh),0,nfailed(12),'max nneigh',thread_id=id)
+       ! two_kernel SC h-shift typically needs one extra Newton iteration
        nexact = 2*nptot
+       if (two_kernel) nexact = 3*nptot
        call checkval(nrhocalc,nexact,0,nfailed(13),'n density calcs',thread_id=id)
        nexact = nptot*int(realneigh)
        call checkval(nactual,nexact,0,nfailed(14),'total nneigh',thread_id=id)
@@ -256,7 +258,7 @@ subroutine test_derivs(ntests,npass,string)
           ! calculated (finds bug of mistakenly setting inactives to zero)
           !
           nfailed(:) = 0; m = 0
-          call check_hydro(np,nfailed,m,hzero,mask)
+          call check_hydro(np,nfailed,m,hzero,rhozero,mask)
           if (.not.isothermal) call check_fxyzu(np,nfailed,m,mask)
 
           call update_test_scores(ntests,nfailed,npass)
@@ -319,7 +321,7 @@ subroutine test_derivs(ntests,npass,string)
     call rcut_mask(rcut,xyzh,npart,mask)
 
     nfailed(:) = 0; m = 0; tol_fac = 1.
-    call check_hydro(np,nfailed,m,hzero,mask)
+    call check_hydro(np,nfailed,m,hzero,rhozero,mask)
     if (use_apr) tol_fac = 5.
     if (maxdvdx==maxp) then
        call checkvalf(np,xyzh,dvdx(1,:),dvxdx,1.7e-3,nfailed(m+1), 'dvxdx',mask)
@@ -408,7 +410,7 @@ subroutine test_derivs(ntests,npass,string)
        call rcut_mask(rcut,xyzh,npart,mask)
 
        nfailed(:) = 0; m = 0
-       call check_hydro(np,nfailed,m,hzero,mask)
+       call check_hydro(np,nfailed,m,hzero,rhozero,mask)
        do j=1,1 !ndustsmall !--Only need one because all dust species are identical
           if (use_dust) then
              grainsizek = grainsize(j)
@@ -495,23 +497,28 @@ subroutine test_derivs(ntests,npass,string)
        !--check that various quantities come out as they should do
        !
        nfailed(:) = 0
-       call checkval(np,xyzh(4,:),hzero,3.e-4,nfailed(1),'h (density)',mask)
+       m = 0
+       call check_hydro(np,nfailed,m,hzero,rhozero,mask)
 
-       call checkvalf(np,xyzh,divBsymm(:),divBfunc,2.e-3,nfailed(2),'divB (symm)',mask)
-       call checkvalf(np,xyzh,dBevol(1,:),dBxdt,2.e-3,nfailed(3),'dBx/dt',mask)
-       call checkvalf(np,xyzh,dBevol(2,:),dBydt,2.e-3,nfailed(4),'dBy/dt',mask)
-       call checkvalf(np,xyzh,dBevol(3,:),dBzdt,2.e-2,nfailed(5),'dBz/dt',mask)
+       call checkvalf(np,xyzh,divBsymm(:),divBfunc,2.e-3,nfailed(m+1),'divB (symm)',mask)
+       call checkvalf(np,xyzh,dBevol(1,:),dBxdt,2.e-3,nfailed(m+2),'dBx/dt',mask)
+       call checkvalf(np,xyzh,dBevol(2,:),dBydt,2.e-3,nfailed(m+3),'dBy/dt',mask)
+       call checkvalf(np,xyzh,dBevol(3,:),dBzdt,2.e-2,nfailed(m+4),'dBz/dt',mask)
 
-       call checkvalf(np,xyzh,fxyzu(1,:),forcemhdx,2.5e-2,nfailed(9),'mhd force(x)',mask)
-       call checkvalf(np,xyzh,fxyzu(2,:),forcemhdy,2.5e-2,nfailed(10),'mhd force(y)',mask)
-       call checkvalf(np,xyzh,fxyzu(3,:),forcemhdz,2.5e-2,nfailed(11),'mhd force(z)',mask)
+       call checkvalf(np,xyzh,fxyzu(1,:),forcemhdx,2.5e-2,nfailed(m+5),'mhd force(x)',mask)
+       call checkvalf(np,xyzh,fxyzu(2,:),forcemhdy,2.5e-2,nfailed(m+6),'mhd force(y)',mask)
+       call checkvalf(np,xyzh,fxyzu(3,:),forcemhdz,2.5e-2,nfailed(m+7),'mhd force(z)',mask)
        if (ndivcurlB >= 1) then
-          call checkvalf(np,xyzh,divcurlB(idivB,:),divBfunc,1.e-3,nfailed(12),'div B (diff)',mask)
+          call checkvalf(np,xyzh,divcurlB(idivB,:),divBfunc,1.e-3,nfailed(m+8),'div B (diff)',mask)
        endif
        if (ndivcurlB >= 4) then
-          call checkvalf(np,xyzh,divcurlB(icurlBx,:),curlBfuncx,1.e-3,nfailed(13),'curlB(x)',mask)
-          call checkvalf(np,xyzh,divcurlB(icurlBy,:),curlBfuncy,1.e-3,nfailed(14),'curlB(y)',mask)
-          call checkvalf(np,xyzh,divcurlB(icurlBz,:),curlBfuncz,1.e-3,nfailed(15),'curlB(z)',mask)
+          call checkvalf(np,xyzh,divcurlB(icurlBx,:),curlBfuncx,1.e-3,nfailed(m+9),'curlB(x)',mask)
+          call checkvalf(np,xyzh,divcurlB(icurlBy,:),curlBfuncy,1.e-3,nfailed(m+10),'curlB(y)',mask)
+          call checkvalf(np,xyzh,divcurlB(icurlBz,:),curlBfuncz,1.e-3,nfailed(m+11),'curlB(z)',mask)
+       endif
+       ! kinetic + thermal + magnetic energy conservation (see paper draft)
+       if (.not.isothermal .and. nactive==npart) then
+          call check_mhd_energy_conservation(nfailed,m,2.e-13)
        endif
        call update_test_scores(ntests,nfailed,npass)
        if (ind_timesteps) call reset_allactive(npart,nactive)
@@ -594,13 +601,16 @@ subroutine test_derivs(ntests,npass,string)
        !--check that various quantities come out as they should do
        !
        nfailed(:) = 0
-       call checkval(np,xyzh(4,:),hzero,3.e-4,nfailed(1),'h (density)',mask)
-       call checkvalf(np,xyzh,divBsymm(:),divBfunc,1.e-3,nfailed(2),'divB',mask)
-       call checkvalf(np,xyzh,dBevol(1,:),dpsidx,8.5e-4,nfailed(3),'gradpsi_x',mask)
-       call checkvalf(np,xyzh,dBevol(2,:),dpsidy,9.3e-4,nfailed(4),'gradpsi_y',mask)
-       call checkvalf(np,xyzh,dBevol(3,:),dpsidz,2.e-3,nfailed(5),'gradpsi_z',mask)
+       m = 0
+       call check_hydro(np,nfailed,m,hzero,rhozero,mask)
+       call checkvalf(np,xyzh,divBsymm(:),divBfunc,1.e-3,nfailed(m+1),'divB',mask)
+       ! grad psi ~ 1/rho^2: with h(n), SC cubic rho bias ~8e-4 => ~1.6e-3 vs continuum at rhozero
+       ! (zeta/Omega fold reduces correctly; same error with a plain *Omega multiply)
+       call checkvalf(np,xyzh,dBevol(1,:),dpsidx,1.7e-3,nfailed(m+2),'gradpsi_x',mask)
+       call checkvalf(np,xyzh,dBevol(2,:),dpsidy,1.7e-3,nfailed(m+3),'gradpsi_y',mask)
+       call checkvalf(np,xyzh,dBevol(3,:),dpsidz,2.e-3,nfailed(m+4),'gradpsi_z',mask)
        !--can't do dpsi/dt check because we use vsigdtc = max over neighbours
-       !call checkvalf(np,xyzh,dBevol(4,:),dpsidt,6.e-3,nfailed(6),'dpsi/dt')
+       !call checkvalf(np,xyzh,dBevol(4,:),dpsidt,6.e-3,nfailed(m+5),'dpsi/dt')
        call update_test_scores(ntests,nfailed,npass)
 
        !--restore ieos
@@ -633,10 +643,11 @@ subroutine test_derivs(ntests,npass,string)
           !--check that various quantities come out as they should do
           !
           nfailed(:) = 0
-          call checkval(np,xyzh(4,:),hzero,3.e-4,nfailed(1),'h (density)',mask)
-          call checkvalf(np,xyzh,dBevol(1,:),dBambix,8.5e-4,nfailed(2),'dBambi_x',mask)
-          call checkvalf(np,xyzh,dBevol(2,:),dBambiy,8.5e-4,nfailed(3),'dBambi_y',mask)
-          call checkvalf(np,xyzh,dBevol(3,:),dBambiz,2.e-3,nfailed(4),'dBambi_z',mask)
+          m = 0
+          call check_hydro(np,nfailed,m,hzero,rhozero,mask)
+          call checkvalf(np,xyzh,dBevol(1,:),dBambix,8.5e-4,nfailed(m+1),'dBambi_x',mask)
+          call checkvalf(np,xyzh,dBevol(2,:),dBambiy,8.5e-4,nfailed(m+2),'dBambi_y',mask)
+          call checkvalf(np,xyzh,dBevol(3,:),dBambiz,2.e-3,nfailed(m+3),'dBambi_z',mask)
           call update_test_scores(ntests,nfailed,npass)
 
           !--restore ieos
@@ -675,7 +686,7 @@ subroutine test_derivs(ntests,npass,string)
     !
     nfailed(:) = 0; m=0
     mask = .true.
-    call check_hydro(nparttest,nfailed,m,hblob,mask)
+    call check_hydro(nparttest,nfailed,m,hblob,1000.*rhozero,mask)
     if (.not.isothermal) call check_fxyzu_nomask(nparttest,nfailed,m) ! this one
     !
     !--also check that the number of neighbours is correct
@@ -714,7 +725,7 @@ subroutine test_derivs(ntests,npass,string)
           !--check hydro quantities come out as they should do
           !
           nfailed(:) = 0; m=0
-          call check_hydro(nparttest,nfailed,m,hblob,mask)
+          call check_hydro(nparttest,nfailed,m,hblob,1000.*rhozero,mask)
           if (.not.isothermal) call check_fxyzu_nomask(nparttest,nfailed,m)
           call update_test_scores(ntests,nfailed,npass)
        enddo
@@ -888,7 +899,7 @@ end subroutine setup_density_contrast
 !----------------------------------------------------
 subroutine check_twokernel_neigh_range(label,ntests,npass)
  use io,        only:id,master
- use kernel,    only:radkern,wab0,wab0_tilde
+ use kernel,    only:radkern,cnormk,cnormk_tilde
  use part,      only:npart,hfact
  use physcon,   only:pi
  use testutils, only:checkval,update_test_scores
@@ -897,8 +908,8 @@ subroutine check_twokernel_neigh_range(label,ntests,npass)
  integer :: nmin1,nmax1,nmin2,nmax2,range1,range2,nfailed(3)
  real    :: nmean1,nmean2,expected_nneigh
 
- ! placeholder Wtilde == W: no narrower nneigh range to assert yet
- if (abs(wab0_tilde - wab0) < tiny(wab0)) then
+ ! skip if Wtilde is the same kernel as W (same 3D normalisation)
+ if (abs(cnormk_tilde - cnormk) < tiny(cnormk)) then
     if (id==master) write(*,"(1x,a)") &
        'SKIPPING two_kernel nneigh range ('//trim(label)//'): Wtilde identical to W'
     return
@@ -1030,7 +1041,7 @@ subroutine test_avderivs(npart,nactive,hzero,rcut,mask,ntests,npass)
  call get_derivs_global()
  call rcut_mask(rcut,xyzh,npart,mask)
  nfailed(:) = 0; m = 0
- call check_hydro(npart,nfailed,m,hzero,mask)
+ call check_hydro(npart,nfailed,m,hzero,rhozero,mask)
  call checkvalf(npart,xyzh,fxyzu(1,:),forceavx,5.7e-3,nfailed(m+1),'art. visc force(x)',mask)
  call checkvalf(npart,xyzh,fxyzu(2,:),forceavy,1.4e-2,nfailed(m+2),'art. visc force(y)',mask)
  call checkvalf(npart,xyzh,fxyzu(3,:),forceavz,1.3e-2,nfailed(m+3),'art. visc force(z)',mask)
@@ -1084,7 +1095,7 @@ subroutine test_cullendehnen(hzero,mask,ntests,npass)
     if (id==master) call printused(tused)
 
     nfailed(:) = 0; m = 0
-    call check_hydro(npart,nfailed,m,hzero,mask)
+    call check_hydro(npart,nfailed,m,hzero,rhozero,mask)
     if (nalpha >= 2) then
        ialphaloc = 2
        call checkvalf(npart,xyzh,alphaind(ialphaloc,:),alphalocfunc,3.5e-4,nfailed(m+1),'alphaloc',mask)
@@ -1252,31 +1263,45 @@ end subroutine reset_mhd_to_zero
 !  to avoid repeated code
 !+
 !--------------------------------------
-subroutine check_hydro(n,nfailed,j,hzero,mask)
+subroutine check_hydro(n,nfailed,j,hzero,rhozero,mask)
  use dim,       only:curlv,maxp,maxgradh,use_apr
- use part,      only:xyzh,divcurlv,gradh,icurlvx,icurlvy,icurlvz
+ use part,      only:xyzh,divcurlv,gradh,icurlvx,icurlvy,icurlvz,rho
  use kernel,    only:kernelname
+ use options,   only:two_kernel
  use testutils, only:checkval,checkvalf
  integer, intent(in)    :: n
  integer, intent(inout) :: nfailed(:),j
- real,    intent(in)    :: hzero
+ real,    intent(in)    :: hzero,rhozero
  logical, intent(in)    :: mask(:)
- real :: tol_dens
+ real :: tol_h,tol_rho,tol_gradh,gradh_exp
  logical :: testgradh
 
- tol_dens = 3.6e-4
- if (use_apr) tol_dens = 4.e-3
+ ! h from n: on SC, companion Wtilde shifts h by ~1.2%; rho from M4 stays accurate
+ tol_h = 3.6e-4
+ tol_rho = 1.5e-3
+ tol_gradh = 1.e-5
+ gradh_exp = 1.01948   ! 1/OmegaTilde for M4 on SC at eta=1.2
+ if (two_kernel) then
+    tol_h = 1.5e-2     ! allow SC n-bias h/h0 ~ 1.012
+    tol_rho = 1.5e-3   ! M4 rho bias ~0.01% after h-iteration
+    gradh_exp = 1.01878
+ endif
+ if (use_apr) then
+    tol_h = 4.e-3
+    tol_rho = 5.e-3
+ endif
  testgradh = (maxgradh==maxp .and. index(kernelname,'cubic') > 0)
 
- call checkval(n,xyzh(4,1:n),hzero,tol_dens,nfailed(j+1),'h (density)',mask)
- call checkvalf(n,xyzh,divcurlv(1,1:n),divvfunc,1.e-3,nfailed(j+2),'divv',mask)
+ call checkval(n,xyzh(4,1:n),hzero,tol_h,nfailed(j+1),'h (density)',mask)
+ call checkval(n,rho(1:n),rhozero,tol_rho,nfailed(j+2),'rho (density)',mask)
+ call checkvalf(n,xyzh,divcurlv(1,1:n),divvfunc,1.e-3,nfailed(j+3),'divv',mask)
  if (curlv) then
-    call checkvalf(n,xyzh,divcurlv(icurlvx,1:n),curlvfuncx,1.5e-3,nfailed(j+3),'curlv(x)',mask)
-    call checkvalf(n,xyzh,divcurlv(icurlvy,1:n),curlvfuncy,1.e-3,nfailed(j+4),'curlv(y)',mask)
-    call checkvalf(n,xyzh,divcurlv(icurlvz,1:n),curlvfuncz,1.e-3,nfailed(j+5),'curlv(z)',mask)
+    call checkvalf(n,xyzh,divcurlv(icurlvx,1:n),curlvfuncx,1.5e-3,nfailed(j+4),'curlv(x)',mask)
+    call checkvalf(n,xyzh,divcurlv(icurlvy,1:n),curlvfuncy,1.e-3,nfailed(j+5),'curlv(y)',mask)
+    call checkvalf(n,xyzh,divcurlv(icurlvz,1:n),curlvfuncz,1.e-3,nfailed(j+6),'curlv(z)',mask)
  endif
- if (testgradh) call checkval(n,gradh(1,1:n),1.01948,1.e-5,nfailed(j+6),'gradh',mask)
- j = j + 6
+ if (testgradh) call checkval(n,gradh(1,1:n),gradh_exp,tol_gradh,nfailed(j+7),'gradh',mask)
+ j = j + 7
 
 end subroutine check_hydro
 
@@ -1312,6 +1337,52 @@ subroutine check_energy_conservation(nfailed,j,tol)
  j = j + 2
 
 end subroutine check_energy_conservation
+
+!--------------------------------------
+!+
+!  MHD energy conservation check:
+!    dE/dt = sum m [ v.dv/dt + du/dt
+!                  + (1/2)(B/rho)^2 (drho/dt) + B.d(B/rho)/dt ]
+!  with drho/dt = -rho div v from the stored div v.
+!  (Matches continuous identity with e_mag = B^2/(2 rho).)
+!+
+!--------------------------------------
+subroutine check_mhd_energy_conservation(nfailed,j,tol)
+ use dim,       only:use_apr
+ use part,      only:npart,fxyzu,vxyzu,dBevol,Bevol,rho,divcurlv,idivv,&
+                     massoftype,igas,apr_level,aprmassoftype
+ use mpiutils,  only:reduceall_mpi
+ use testutils, only:checkval
+ integer, intent(inout) :: nfailed(:),j
+ real,    intent(in)    :: tol
+ integer :: i
+ real :: deint,dekin,demag,pmassi,sum,rhoi,drhodt,B2onrho2
+
+ deint = 0.
+ dekin = 0.
+ demag = 0.
+ do i=1,npart
+    pmassi = massoftype(igas)
+    if (use_apr) pmassi = aprmassoftype(igas,apr_level(i))
+    rhoi = max(rho(i),tiny(rhoi))
+    ! continuity: drho/dt = -rho div v (div v stored)
+    drhodt = -rhoi*real(divcurlv(idivv,i))
+    deint = deint + pmassi*fxyzu(iu,i)
+    dekin = dekin + pmassi*dot_product(vxyzu(1:3,i),fxyzu(1:3,i))
+    ! d/dt (B^2/(2 rho)) = (1/2)(B/rho)^2 drho/dt + B · d(B/rho)/dt
+    B2onrho2 = Bevol(1,i)**2 + Bevol(2,i)**2 + Bevol(3,i)**2
+    demag = demag + pmassi*(0.5*B2onrho2*drhodt &
+            + rhoi*dot_product(Bevol(1:3,i),dBevol(1:3,i)))
+ enddo
+ deint = reduceall_mpi('+',deint)
+ dekin = reduceall_mpi('+',dekin)
+ demag = reduceall_mpi('+',demag)
+ sum = deint + dekin + demag
+ call checkval(sum,0.,tol,nfailed(j+1), &
+    '\sum v.dv/dt + du/dt + d/dt(B^2/(2rho)) = 0')
+ j = j + 1
+
+end subroutine check_mhd_energy_conservation
 
 !--------------------------------------
 !+
@@ -2297,12 +2368,11 @@ end function dBzdzdz
 
 real function dBxdtresist(xyzhi)
  use options, only:alphaB
- use part,    only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
  real :: vsig, rho1i
 
  vsig = 0. !valfven(xyzhi(1))
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
+ rho1i = 1.0/rhozero
  dBxdtresist = rho1i * (0.5*alphaB*xyzhi(4)*(vsig*(dBxdxdx(xyzhi) + dBxdydy(xyzhi) + dBxdzdz(xyzhi)) + &
    0.*(dvalfvendx(xyzhi)*dBxdx(xyzhi) + dvalfvendy(xyzhi)*dBxdy(xyzhi) + dvalfvendz(xyzhi)*dBxdz(xyzhi))))
 
@@ -2310,12 +2380,11 @@ end function dBxdtresist
 
 real function dBydtresist(xyzhi)
  use options, only:alphaB
- use part,    only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
  real :: vsig, rho1i
 
  vsig = 0. !valfven(xyzhi)
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
+ rho1i = 1.0/rhozero
  dBydtresist = rho1i * (0.5*alphaB*xyzhi(4)*(vsig*(dBydxdx(xyzhi) + dBydydy(xyzhi) + dBydzdz(xyzhi)) + &
    0.*(dvalfvendx(xyzhi)*dBydx(xyzhi) + dvalfvendy(xyzhi)*dBydy(xyzhi) + dvalfvendz(xyzhi)*dBydz(xyzhi))))
 
@@ -2323,12 +2392,10 @@ end function dBydtresist
 
 real function dBzdtresist(xyzhi)
  use options, only:alphaB
- use part,    only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
- real :: vsig, rho1i
+ real :: vsig
 
  vsig = 0. !valfven(xyzhi)
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
  dBzdtresist = 0.5*alphaB*xyzhi(4)*(vsig*(dBzdxdx(xyzhi) + dBzdydy(xyzhi) + dBzdzdz(xyzhi)) + &
    0.*(dvalfvendx(xyzhi)*dBzdx(xyzhi) + dvalfvendy(xyzhi)*dBzdy(xyzhi) + dvalfvendz(xyzhi)*dBzdz(xyzhi)))
 
@@ -2407,34 +2474,37 @@ end function dAzdt
 !  functional form for dB/dt
 !+
 !----------------------------------------------------------------
+!----------------------------------------------------------------
+!+
+!  functional form for d(B/rho)/dt; use physical mass density rhozero
+!  (not rhoh(h), which differs under two_kernel where h follows n)
+!+
+!----------------------------------------------------------------
 real function dBxdt(xyzhi)
- use part,    only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
  real :: rho1i
 
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
+ rho1i = 1.0/rhozero
  dBxdt = rho1i * (Bx(xyzhi)*dvxdx(xyzhi) + By(xyzhi)*dvxdy(xyzhi) &
              + Bz(xyzhi)*dvxdz(xyzhi))! - Bx(xyzhi)*divvfunc(xyzhi))
 
 end function dBxdt
 
 real function dBydt(xyzhi)
- use part,    only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
  real :: rho1i
 
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
+ rho1i = 1.0/rhozero
  dBydt = rho1i * (Bx(xyzhi)*dvydx(xyzhi) + By(xyzhi)*dvydy(xyzhi) &
              + Bz(xyzhi)*dvydz(xyzhi))! - By(xyzhi)*divvfunc(xyzhi))
 
 end function dBydt
 
 real function dBzdt(xyzhi)
- use part,    only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
  real :: rho1i
 
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
+ rho1i = 1.0/rhozero
  dBzdt = rho1i * (Bx(xyzhi)*dvzdx(xyzhi) + By(xyzhi)*dvzdy(xyzhi) &
              + Bz(xyzhi)*dvzdz(xyzhi))! - Bz(xyzhi)*divvfunc(xyzhi))
 
@@ -2565,13 +2635,12 @@ end function dpsidt
 real function dpsidx(xyzhi)
  use boundary, only:dxbound,xmin
  use physcon,  only:pi
- use part,     only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
  real :: rho1i
 
  !--minus grad psi
  !  updated to be -1/rho grad psi (for B/rho evolution)
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
+ rho1i = 1.0/rhozero
  dpsidx = dBxdt(xyzhi) - rho1i * cos(2.*pi*(xyzhi(1)-xmin)/dxbound)
 
 end function dpsidx
@@ -2579,13 +2648,12 @@ end function dpsidx
 real function dpsidy(xyzhi)
  use boundary, only:dybound,ymin
  use physcon,  only:pi
- use part,     only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
  real :: rho1i
 
  !--minus grad psi
  !  updated to be -1/rho grad psi (for B/rho evolution)
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
+ rho1i = 1.0/rhozero
  dpsidy = dBydt(xyzhi) - rho1i * cos(2.*pi*(xyzhi(2)-ymin)/dybound)
 
 end function dpsidy
@@ -2593,13 +2661,12 @@ end function dpsidy
 real function dpsidz(xyzhi)
  use boundary, only:dzbound,zmin
  use physcon,  only:pi
- use part,     only:rhoh,massoftype,igas
  real, intent(in) :: xyzhi(4)
  real :: rho1i
 
  !--minus grad psi
  !  updated to be -1/rho grad psi (for B/rho evolution)
- rho1i = 1.0/rhoh(xyzhi(4),massoftype(igas))
+ rho1i = 1.0/rhozero
  dpsidz = dBzdt(xyzhi) - rho1i * sin(2.*pi*(xyzhi(3)-zmin)/dzbound)
 
 end function dpsidz

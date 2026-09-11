@@ -65,7 +65,7 @@ subroutine test_kernel(ntests,npass)
  call checkval(radkern2,radkern**2,tiny(0.),nerr(1),'radkern2 = radkern*radkern')
  call update_test_scores(ntests,nerr(1:1),npass)
 !
-!--number-density (smooth-shift-4) companion: self-value at q=0
+!--number-density companion: self-value at q=0
 !
  call get_kernel_tilde(0.,0.,wtilde,grtilde)
  call checkval(wab0_tilde,wtilde,tiny(0.),nerr(1),'wab0_tilde = Wtilde(0)')
