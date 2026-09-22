@@ -156,6 +156,7 @@ subroutine set_sphere_mc(id,master,rmin,rmax,hfact,np_requested,np,xyzh, &
                          ierr,nptot,mask,verbose)
  use random,     only:ran2
  use stretchmap, only:set_density_profile
+ use io,         only:fatal
  integer,         intent(in)    :: id,master,np_requested
  integer,         intent(inout) :: np   ! number of actual particles
  real,            intent(in)    :: rmin,rmax,hfact
@@ -176,6 +177,13 @@ subroutine set_sphere_mc(id,master,rmin,rmax,hfact,np_requested,np,xyzh, &
  psep = (vol_sphere/real(np_requested))**(1./3.)
  maxp  = size(xyzh(1,:))
  ierr  = 1
+ !
+ ! fail here rather than silently truncating the sphere or writing past
+ ! the end of the particle arrays
+ !
+ if (npin + np_requested > maxp) then
+    call fatal('set_sphere','np > array size: use ./phantomsetup --maxp=',var='np_requested',ival=np_requested)
+ endif
 
  do i=npin+1,npin+np_requested,2
     !
@@ -201,21 +209,15 @@ subroutine set_sphere_mc(id,master,rmin,rmax,hfact,np_requested,np,xyzh, &
     !
     iparttot = iparttot + 1
     if (mask(iparttot)) then
+       if (np >= maxp) call fatal('set_sphere','np > array size: use ./phantomsetup --maxp=',var='np_requested',ival=np_requested)
        np = np + 1
-       if (np > maxp) then
-          print*,' ERROR: np > array size: use ./phantomsetup --maxp=',np_requested
-          return
-       endif
        xyzh(1:3,np) = rr*dir
        xyzh(4,np)   = hfact*psep
     endif
     iparttot = iparttot + 1
     if (mask(iparttot)) then
+       if (np >= maxp) call fatal('set_sphere','np > array size: use ./phantomsetup --maxp=',var='np_requested',ival=np_requested)
        np = np + 1
-       if (np > maxp) then
-          print*,' ERROR: np > array size: use ./phantomsetup --maxp=',np_requested
-          return
-       endif
        xyzh(1:3,np) = -rr*dir
        xyzh(4,np)   = hfact*psep
     endif

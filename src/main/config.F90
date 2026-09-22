@@ -310,7 +310,7 @@ module dim
 !--------------------
 #ifdef APR
  logical, parameter :: use_apr = .true.
- integer, parameter :: apr_maxlevel = 10
+ integer, parameter :: apr_maxlevel = 24
 #else
  logical, parameter :: use_apr = .false.
  integer, parameter :: apr_maxlevel = 0

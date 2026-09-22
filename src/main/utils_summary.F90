@@ -14,12 +14,13 @@ module io_summary
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: None
+! :Dependencies: dim
 !
+ use dim, only:apr_maxlevel
  implicit none
  integer, parameter :: maxrhomx = 32                ! Number of maximum possible rhomax' per set
  integer, parameter :: maxisink =  5                ! Maximum number of sink particles's accretion details to track
- integer, parameter :: maxiapr  = 10                ! Maximum levels anticipated for APR
+ integer, parameter :: maxiapr  = apr_maxlevel      ! Maximum levels anticipated for APR (>= apr_maxlevel, config.F90)
  !--Array indicies for various parameters
  !  Timesteps
  integer, parameter :: iosumdtf   =  1              ! dtforce (gas particles)
@@ -607,7 +608,7 @@ subroutine summary_printout(iprint,nptmass)
        write(iprint,210) '|',i,' |',iosum_apr(i+4),'|'
     enddo
     write(iprint,'(a)') '|  ---------------------                                                     |'
-    write(iprint,220) '|  total  |',sum(iosum_apr(5:maxiapr)),'|'
+    write(iprint,220) '|  total  |',sum(iosum_apr(5:maxiapr+4)),'|'
     write(iprint,'(a)') '------------------------------------------------------------------------------'
     iosum_apr(3:maxiapr+4) = 0
  endif

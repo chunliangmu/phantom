@@ -28,10 +28,10 @@ module apr
  public :: use_apr
 
  private
- real    :: sep_factor = 0.2
- logical :: apr_verbose = .false.
+ real, parameter    :: sep_factor = 0.2
+ logical, parameter :: apr_verbose = .true.
+ logical, parameter :: adjusted_split = .true.
  logical :: do_relax = .false.
- logical :: adjusted_split = .true.
 
 contains
 
@@ -47,7 +47,7 @@ subroutine init_apr(apr_level,ierr)
  use get_apr_level, only:set_get_apr
  use io_summary,    only:print_apr,iosum_apr
  use io,            only:warning,fatal
- use dim,           only:maxvxyzu
+ use dim,           only:maxvxyzu,apr_maxlevel
  integer,         intent(inout) :: ierr
  integer(kind=1), intent(inout) :: apr_level(:)
  logical :: previously_set
@@ -56,6 +56,13 @@ subroutine init_apr(apr_level,ierr)
  ! the resolution levels are in addition to the base resolution
  apr_max = apr_max_in + 1
  if (split_dir == 2) do_relax = .true.
+
+ ! aprmassoftype in part.F90 is statically sized apr_maxlevel;
+ ! going beyond this silently corrupts memory, so stop loudly here instead
+ if (apr_max > apr_maxlevel) then
+    call fatal('init_apr','apr_max > apr_maxlevel: recompile with a larger apr_maxlevel in config.F90',&
+               var='apr_max',ival=apr_max)
+ endif
 
  ! if we're reading in a file that already has the levels set,
  ! don't override these
@@ -187,7 +194,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  real, allocatable :: xyzh_merge(:,:),vxyzu_merge(:,:), rneighs(:)
  integer, allocatable :: relaxlist(:),mergelist(:),should_split(:)
  integer, allocatable :: idx_merge(:),should_merge(:),scan_array(:),idx_split(:)
-  real :: get_apr_in(3),xi,yi,zi,dx,dy,dz,rmin_local
+ real :: get_apr_in(3),xi,yi,zi,dx,dy,dz,rmin_local
  logical :: relax_in_loop
 
  ! if this routine doesn't need to be used, just skip it
@@ -305,7 +312,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
        !$omp parallel default(none) &
        !$omp shared(npartold,should_split,idx_split,scan_array,idx_len) &
-       !$omp shared(rneighs,xyzh,adjusted_split) &
+       !$omp shared(rneighs,xyzh) &
        !$omp private(ii,mm,rmin_local,j,xi,yi,zi,dx,dy,dz)
        !$omp do
        do ii = 1,npartold
@@ -324,7 +331,6 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
              zi = xyzh(3,mm)
 
              rmin_local = huge(1.0)
-
              do j = 1,npartold
                 if (j == mm) cycle
                 dx = xi - xyzh(1,j)

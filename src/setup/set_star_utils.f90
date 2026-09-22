@@ -277,6 +277,7 @@ subroutine set_star_density(lattice,id,master,rmin,Rstar,Mstar,hfact,&
  use spherical,    only:set_sphere
  use unifdis,      only:mask_prototype
  use physcon,      only:pi
+ use io,           only:nprocs,fatal
  character(len=*), intent(in)    :: lattice
  integer,          intent(in)    :: id,master,npts,np
  integer(kind=8),  intent(out)   :: npart_total
@@ -287,9 +288,10 @@ subroutine set_star_density(lattice,id,master,rmin,Rstar,Mstar,hfact,&
  real,             intent(inout) :: xyzh(:,:),massoftype(:)
  logical,          intent(in)    :: use_exactN
  procedure(mask_prototype) :: mask
- integer :: nx,i,ntot,npart_old,n
+ integer :: nx,i,ntot,npart_old,n,n_here
  real :: vol_sphere,psep
  logical :: mass_is_set
+ character(len=300) :: msg
 
  !
  ! if this is the first call to set_star_density (npart_old=0),
@@ -304,6 +306,21 @@ subroutine set_star_density(lattice,id,master,rmin,Rstar,Mstar,hfact,&
     n = nint(Mstar/massoftype(igas))
     mass_is_set = .true.
     print "(a,i0)",' WARNING: particle mass is already set, using np = ',n
+ endif
+ !
+ ! crash loudly if the requested particle count cannot fit in the particle arrays:
+ ! there is no reallocation in the setup path,
+ ! so letting set_sphere hit the limit truncates/corrupts the setup
+ ! (in MPI runs each rank places only its share via the domain mask)
+ !
+ n_here = (n + nprocs - 1)/nprocs
+ if (npart + n_here > size(xyzh,dim=2)) then
+    msg = ''
+    write(msg,"(a,i0,a,i0,a)") 'requested np = ',n,' cannot fit in the particle arrays '//&
+         '(maxp = ',size(xyzh,dim=2) - npart,' free): rerun phantomsetup with a larger --maxp; '//&
+         'with APR ref_dir=-1 you probably want apr_start_coarse=T in the .in'//&
+         'and np1 set to the base count (finest count/2^apr_max), not the finest count'
+    call fatal('set_star_density',msg)
  endif
  !
  ! place particles in sphere
