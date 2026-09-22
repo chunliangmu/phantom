@@ -16,7 +16,8 @@ module utils_apr
 !   - apr_drad       : *size of step to next region*
 !   - apr_max        : *number of additional refinement levels (3 -> 2x resolution)*
 !   - apr_mfrac_file : *file containing the cumulative mass fractions of the apr region boundaries (for apr_type=7)*
-!   - apr_rad        : *radius of innermost region*
+!   - apr_rad       : *radius of innermost region*
+!   - apr_start_coarse : *start all particles at the coarsest level and split outward (ref_dir=-1 only)*
 !   - apr_type       : *1: static, 2: sink, 3: clumps, 4: sequential sinks, 5: com, 6: vertical, 7: sink with flexible regions*
 !   - ref_dir        : *increase (1) or decrease (-1) resolution*
 !   - rho_crit_cgs   : *density above which apr zones are created (g/cm^3)*
@@ -30,7 +31,7 @@ module utils_apr
 
  implicit none
 
- public :: read_options_apr,write_options_apr,adjust_entropy
+ public :: read_options_apr,write_options_apr
 
  ! default values for runtime parameters are stored here
  integer :: apr_max_in = 3, ref_dir = 1, apr_type = 1, apr_max = 4
@@ -43,10 +44,8 @@ module utils_apr
  real, allocatable :: prescribed_mfrac(:)
  character(len=120) :: apr_mfrac_file = 'apr_mfrac.dat'
  real, save :: apr_H(2,100)  ! we enforce this to be 100
- real, allocatable :: entropy_stored(:)
- integer(kind=8), allocatable :: entropy_list(:)
- integer :: entropy_count
 
+ logical :: apr_start_coarse = .false.
  logical :: apr_region_is_circle = .false.
 
 contains
@@ -135,23 +134,28 @@ subroutine write_options_apr(iunit)
  call write_inopt(apr_type,'apr_type','1: static, 2: sink, 3: clumps, 4: sequential sinks, 5: com, 6: vertical, &
     &7: sink with flexible regions',iunit)
 
- select case (apr_type)
- case(1)
-    call write_inopt(apr_centre_in(1),'apr_centre(1)','centre of region x position',iunit)
-    call write_inopt(apr_centre_in(2),'apr_centre(2)','centre of region y position',iunit)
-    call write_inopt(apr_centre_in(3),'apr_centre(3)','centre of region z position',iunit)
- case(2,4)
-    call write_inopt(track_part_in,'track_part','number of sink to track',iunit)
- case(7)
-    call write_inopt(track_part_in,'track_part','number of sink to track',iunit)
-    call write_inopt(apr_mfrac_file,'apr_mfrac_file', &
-        'file containing the cumulative mass fractions of the apr region boundaries',iunit)
- case(3)
-    call write_inopt(rho_crit_cgs,'rho_crit_cgs','density above which apr zones are created (g/cm^3)',iunit)
- end select
+  select case (apr_type)
+  case(1)
+     call write_inopt(apr_centre_in(1),'apr_centre(1)','centre of region x position',iunit)
+     call write_inopt(apr_centre_in(2),'apr_centre(2)','centre of region y position',iunit)
+     call write_inopt(apr_centre_in(3),'apr_centre(3)','centre of region z position',iunit)
+  case(2,4)
+     call write_inopt(track_part_in,'track_part','number of sink to track',iunit)
+  case(7)
+     call write_inopt(track_part_in,'track_part','number of sink to track',iunit)
+     call write_inopt(apr_mfrac_file,'apr_mfrac_file', &
+         'file containing the cumulative mass fractions of the apr region boundaries',iunit)
+  case(3)
+     call write_inopt(rho_crit_cgs,'rho_crit_cgs','density above which apr zones are created (g/cm^3)',iunit)
+  end select
 
- call write_inopt(apr_rad,'apr_rad','radius of innermost region',iunit)
- call write_inopt(apr_drad,'apr_drad','size of step to next region',iunit)
+  if (ref_dir == -1) then
+     call write_inopt(apr_start_coarse,'apr_start_coarse', &
+         'start all particles at the coarsest level and split outward (setup option)',iunit)
+  endif
+
+  call write_inopt(apr_rad,'apr_rad','radius of innermost region',iunit)
+  call write_inopt(apr_drad,'apr_drad','size of step to next region',iunit)
 
 end subroutine write_options_apr
 
@@ -162,8 +166,10 @@ end subroutine write_options_apr
 !-----------------------------------------------------------------------
 subroutine read_options_apr(db,nerr)
  use infile_utils, only:inopts,read_inopt
+ use io,           only:warning
  type(inopts), intent(inout) :: db(:)
  integer,      intent(inout) :: nerr
+ integer :: ioerr
 
  call read_inopt(apr_max_in,'apr_max',db,errcount=nerr,min=0)
  call read_inopt(ref_dir,'ref_dir',db,errcount=nerr,min=-1,max=1)
@@ -184,10 +190,21 @@ subroutine read_options_apr(db,nerr)
     call read_inopt(rho_crit_cgs,'rho_crit_cgs',db,errcount=nerr,min=0.)
  end select
 
- if (apr_type == 7) call read_apr_mfrac()
+  if (apr_type == 7) call read_apr_mfrac()
 
- call read_inopt(apr_rad,'apr_rad',db,errcount=nerr,min=tiny(apr_rad))
- call read_inopt(apr_drad,'apr_drad',db,errcount=nerr,min=tiny(apr_drad))
+  if (ref_dir == -1) then
+     call read_inopt(apr_start_coarse,'apr_start_coarse',db,errcount=nerr)
+  else
+     ! only meaningful with ref_dir=-1; if present with ref_dir=1, ignore it
+     call read_inopt(apr_start_coarse,'apr_start_coarse',db,err=ioerr)
+     if (ioerr == 0 .and. apr_start_coarse) then
+        call warning('read_options_apr','apr_start_coarse requires ref_dir=-1; ignoring it')
+        apr_start_coarse = .false.
+     endif
+  endif
+
+  call read_inopt(apr_rad,'apr_rad',db,errcount=nerr,min=tiny(apr_rad))
+  call read_inopt(apr_drad,'apr_drad',db,errcount=nerr,min=tiny(apr_drad))
 
 end subroutine read_options_apr
 
@@ -340,44 +357,5 @@ subroutine write_aprtrack(tdump,dumpfile)
  enddo
 
 end subroutine write_aprtrack
-
-
-!-----------------------------------------------------------------------
-!+
-!  Resets the entropy on the new particles to the saved value -
-!  this is called *after* dens
-!+
-!-----------------------------------------------------------------------
-subroutine adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
- use eos, only: gamma
- use part, only: rhoh,igasP,igas,aprmassoftype,ics,iorig
- real,    intent(in) :: xyzh(:,:)
- real,    intent(inout) :: vxyzu(:,:)
- integer(kind=1), intent(in) :: apr_level(:)
- real,    intent(inout) :: eos_vars(:,:)
- integer :: i,ii
- real    :: pmassi,rhoi
-
-! !$omp parallel default(none) &
-! !$omp shared(entropy_count,entropy_list,entropy_stored) &
-! !$omp shared(aprmassoftype,apr_level) &
-! !$omp shared(iorig,xyzh,gamma) &
-! !$omp shared(eos_vars,vxyzu) &
-! !$omp private(i,ii,pmassi,rhoi)
-! !$omp do
-!  do i = 1, entropy_count
-!     if (entropy_list(i) < 0) cycle
-!     ii = findloc(iorig,entropy_list(i),dim=1) ! this is the actual particle number
-!     if (ii==0) cycle
-!     pmassi = aprmassoftype(igas,apr_level(ii))
-!     rhoi = rhoh(xyzh(4,ii),pmassi)
-!     eos_vars(igasP,ii) = entropy_stored(i)*rhoi**(gamma)/pmassi       ! reset Pressure
-!     vxyzu(4,ii) = eos_vars(igasP,ii)/((gamma - 1.) * rhoi)            ! reset internal energy
-!     eos_vars(ics,ii) = sqrt(gamma*eos_vars(igasP,ii)/rhoi)           ! and reset sound speed
-!  enddo
-! !$omp enddo
-! !$omp end parallel
-
-end subroutine adjust_entropy
 
 end module utils_apr

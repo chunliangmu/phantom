@@ -41,7 +41,7 @@ subroutine test_apr(ntests,npass)
  use mpiutils,     only:reduceall_mpi
  use dim,          only:periodic,use_apr,do_radiation
  use apr,          only:update_apr
- use utils_apr,    only:apr_centre,apr_max,adjust_entropy
+ use utils_apr,    only:apr_centre,apr_max
  use energies,     only:compute_energies,angtot,etot,totmom,ekin,etherm
  use random,       only:ran2
  use eos,          only:gamma
@@ -164,9 +164,6 @@ subroutine test_apr(ntests,npass)
  apr_centre(1:3,2) = 20.
  call update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
- ! adjust pressure and internal energy to conserve entropy
- call adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
-
  ! Check the new conserved values
  call compute_energies(0.)
  call calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
@@ -185,9 +182,6 @@ subroutine test_apr(ntests,npass)
  write(*,"(/,a)") '--> conducting a merge'
  apr_centre(:,1:2) = 20. ! move the APR zones away again
  call update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
-
- ! adjust pressure and internal energy to conserve entropy
- call adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
 
  ! Check the new conserved values
  call compute_energies(0.)

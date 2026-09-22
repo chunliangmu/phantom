@@ -61,7 +61,6 @@ subroutine derivs(icall,npart,nactive,xyzh,vxyzu,fxyzu,fext,divcurlv,divcurlB,&
  use metric_tools,   only:init_metric
  use radiation_implicit, only:do_radiation_implicit,ierr_failed_to_converge
  use options,        only:implicit_radiation,implicit_radiation_store_drad,use_porosity,need_pressure_on_sinks
- use utils_apr,      only:adjust_entropy
  use HIIRegion,      only:HIIupdateflag,iH2R,HII_feedback
  integer,      intent(in)    :: icall
  integer,      intent(inout) :: npart
@@ -158,9 +157,7 @@ subroutine derivs(icall,npart,nactive,xyzh,vxyzu,fxyzu,fext,divcurlv,divcurlB,&
  endif
 
  ! edit the entropy values if using apr
- if (use_apr) then
-    call adjust_entropy(xyzh,vxyzu,apr_level,eos_vars)
- endif
+ ! (entropy adjustment machinery removed; kept as a no-op location)
 
  if (gr) then
     call cons2primall(npart,xyzh,metrics,pxyzu,vxyzu,dens,eos_vars)

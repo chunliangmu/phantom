@@ -69,6 +69,12 @@ subroutine init_apr(apr_level,ierr)
     ! initialise the base resolution level
     if (ref_dir == 1) then
        apr_level(1:npart) = int(1,kind=1)
+    elseif (apr_start_coarse) then
+       ! start every particle at the coarsest level; the particle mass
+       ! laid down by the setup is the level-1 mass, so no rescaling of
+       ! massoftype is needed and update_apr will split particles
+       ! outward to their prescribed levels (saves the fine laydown)
+       apr_level(1:npart) = int(1,kind=1)
     else
        apr_level(1:npart) = int(apr_max,kind=1)
     endif
@@ -78,7 +84,9 @@ subroutine init_apr(apr_level,ierr)
     ! massoftype(igas) is associated with the
     ! largest particle (don't do it twice accidentally!)
     if (ref_dir == -1) then
-       massoftype(:) = massoftype(:) * 2.**(apr_max -1)
+       if (.not. apr_start_coarse) then
+          massoftype(:) = massoftype(:) * 2.**(apr_max -1)
+       endif
        top_level = 1
     else
        top_level = apr_max
@@ -162,8 +170,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 !$ use omp_lib
  use dim,        only:maxp,ind_timesteps,maxvxyzu
  use part,       only:ntot,isdead_or_accreted,igas,aprmassoftype,&
-                    shuffle_part,iphase,iactive,maxp,npartoftype,&
-                    igasP,rho,eos_vars,iorig
+                     shuffle_part,iphase,iactive,maxp,npartoftype,rho
  use quitdump,   only:quit
  use relaxem,    only:relax_particles
  use utils_apr,  only:find_closest_region,icentre
@@ -171,7 +178,6 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  use io,         only:fatal
  use get_apr_level, only:get_apr,create_or_update_apr_clump
  use io_summary, only:iosum_apr,print_apr
- use eos,        only:gamma
  real,    intent(inout)         :: xyzh(:,:),vxyzu(:,:),fxyzu(:,:)
  integer, intent(inout)         :: npart
  integer(kind=1), intent(inout) :: apr_level(:)
@@ -181,7 +187,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  real, allocatable :: xyzh_merge(:,:),vxyzu_merge(:,:), rneighs(:)
  integer, allocatable :: relaxlist(:),mergelist(:),should_split(:)
  integer, allocatable :: idx_merge(:),should_merge(:),scan_array(:),idx_split(:)
- real :: get_apr_in(3),ientropy,P_i,pmassi,rhoi,xi,yi,zi,dx,dy,dz,rmin_local
+  real :: get_apr_in(3),xi,yi,zi,dx,dy,dz,rmin_local
  logical :: relax_in_loop
 
  ! if this routine doesn't need to be used, just skip it
@@ -198,13 +204,6 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
  ! Just a metric
  if (apr_verbose) print*,'original npart is',npart
-
- ! initialise for the entropy storage
- if (allocated(entropy_list)) deallocate(entropy_list,entropy_stored)
- allocate(entropy_list(maxp*3),entropy_stored(maxp*3))
- entropy_count = 0
- entropy_list(:) = 0
- entropy_stored = 0.
 
  ! Before adjusting the particles, if we're going to
  ! relax them then let's save the reference particles
@@ -239,7 +238,10 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  apri = 0 ! to avoid compiler errors
  apr_last = 0
  ! generally a safe guess, gets checked later
- allocate(scan_array(npart*apr_max),rneighs(npart*apr_max),idx_split(npart*apr_max),should_split(maxp))
+ ! capped at maxp: these are indexed at most up to npartold (<= maxp);
+ ! if n_to_split ever exceeded this the reallocation guard below bumps them to maxp
+ allocate(scan_array(min(npart*apr_max,maxp)),rneighs(min(npart*apr_max,maxp)),&
+          idx_split(min(npart*apr_max,maxp)),should_split(maxp))
 
  if (apr_verbose) print*,'started splitting'
 
@@ -343,28 +345,19 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
        ! now go through and actually split them - this should *probably* not be parallelised
        ! due to the content of the nested functions, idx_len probably isn't that long either
-       do ii = 1,idx_len
-          mm = idx_split(ii) ! original particle that should be split
-          kk = npartold + ii ! location in array for new particle
-          pmassi = aprmassoftype(igas,apr_level(mm))
-          P_i = eos_vars(igasP,mm)
-          rhoi = rho(mm)
-          ientropy = pmassi*(P_i*rhoi**(-gamma))
-          if (adjusted_split) then
-             call splitpart(mm,kk,rneigh=rneighs(ii))
-          else
-             call splitpart(mm,kk)
-          endif
-          if (relax_in_loop) then
-             relaxlist(nrelax + ii) = mm
-             relaxlist(nrelax + n_to_split + ii) = kk
-          endif
-         !  entropy_count = entropy_count + 2
-         !  entropy_stored(entropy_count - 1:entropy_count) = 0.5*ientropy
-         !  ! because we share it across both evenly
-         !  entropy_list(entropy_count - 1) = iorig(mm)
-         !  entropy_list(entropy_count) = iorig(kk)
-       enddo
+        do ii = 1,idx_len
+           mm = idx_split(ii) ! original particle that should be split
+           kk = npartold + ii ! location in array for new particle
+           if (adjusted_split) then
+              call splitpart(mm,kk,rneigh=rneighs(ii))
+           else
+              call splitpart(mm,kk)
+           endif
+           if (relax_in_loop) then
+              relaxlist(nrelax + ii) = mm
+              relaxlist(nrelax + n_to_split + ii) = kk
+           endif
+        enddo
 
        ! if relaxing, update the total number that will be relaxed
        if (relax_in_loop) nrelax = nrelax + 2*n_to_split
@@ -447,7 +440,7 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
        ! Now send them to be merged
        if (nmerge >= 4) call merge_with_special_tree(nmerge,idx_merge,xyzh_merge(:,1:nmerge),&
                                             vxyzu_merge(:,1:nmerge),kk,xyzh,vxyzu,apr_level,nkilled,&
-                                            nrelax,relaxlist,npartnew,entropy_list,entropy_count,entropy_stored)
+                                            nrelax,relaxlist,npartnew)
        nmerge_total = nmerge_total + nkilled ! actually merged
        if (apr_verbose) then
           print*,'merged: ',nkilled,kk
@@ -523,8 +516,7 @@ end subroutine splitpart
 !+
 !-----------------------------------------------------------------------
 subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,current_apr,&
-                                     xyzh,vxyzu,apr_level,nkilled,nrelax,relaxlist,npartnew,&
-                                     entropy_list,entropy_count,entropy_stored)
+                                     xyzh,vxyzu,apr_level,nkilled,nrelax,relaxlist,npartnew)
  use neighkdtree,   only:build_tree,ncells,leaf_is_active,get_cell_location
  use mpiforce,      only:cellforce
  use kdtree,        only:inodeparts,inoderange
@@ -534,11 +526,10 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
  use get_apr_level, only:get_apr,put_in_smallest_bin
  use sortutils,    only:indexx
  use vectorutils,   only:cross_product3D
- integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew,entropy_count
- integer(kind=8), intent(inout) :: entropy_list(:)
+ integer,         intent(inout) :: nmerge,nkilled,nrelax,relaxlist(:),npartnew
  integer(kind=1), intent(inout) :: apr_level(:)
  integer,         intent(in)    :: current_apr,mergelist(:)
- real,            intent(inout) :: xyzh(:,:),vxyzu(:,:),entropy_stored(:)
+ real,            intent(inout) :: xyzh(:,:),vxyzu(:,:)
  real,            intent(inout) :: xyzh_merge(:,:),vxyzu_merge(:,:)
  integer :: remainder,icell,n_cell,apri,m,i,j,k,n,localtmp,ia,ib,ic,id
  integer :: keep1,keep2,kill1,kill2,child_list(12),closest(4)
