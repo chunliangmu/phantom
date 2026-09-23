@@ -291,19 +291,27 @@ end subroutine read_apr_mfrac
 !  Writes tracking file for APR regions
 !+
 !-----------------------------------------------------------------------
-subroutine write_aprtrack(tdump,dumpfile)
+subroutine write_aprtrack(tdump,dumpfile,evfile)
  use io, only:iaprdump,error
  real,             intent(in) :: tdump
- character(len=*), intent(in) :: dumpfile
+ character(len=*), intent(in) :: dumpfile,evfile
  integer :: ierr, i, j
- character(len=10) :: filename
+ character(len=150) :: filename
  character(len=3)  :: padded_ntrack
  character(len=11) :: label
  character(len=256) :: fmt
- integer :: dumpfile_int, dump_length, start_pos
+ character(len=len(evfile)) :: fileprefix
+ integer :: dumpfile_int, dump_length, start_pos, idot
  logical :: iexist
 
  if (ntrack == 0) return ! nothing to do here
+
+ ! derive the file prefix from the evfile name, e.g. star01.ev -> star01,
+ ! so that the APR tracking file name follows the run/dump numbering
+ ! (star01_apr.ev) and does not collide between runs or restarts
+ idot = index(evfile,'.ev') - 1
+ if (idot <= 1) idot = len_trim(evfile)
+ fileprefix = evfile(1:idot)
 
  ! clever formatting
  dump_length = len_trim(dumpfile)
@@ -316,9 +324,9 @@ subroutine write_aprtrack(tdump,dumpfile)
  enddo
  fmt = trim(fmt) // ',ES18.10)'
 
- do i = 1,ntrack
+  do i = 1,ntrack
     write(padded_ntrack, '(I3.3)') i
-    filename = 'apr_' // padded_ntrack // '.ev'
+    filename = trim(fileprefix) // '_apr_' // padded_ntrack // '.ev'
 
     ! check if the file exists or not
     inquire(file=filename,exist=iexist)

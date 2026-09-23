@@ -339,7 +339,7 @@ subroutine check_and_write_dump(time,tstart,tcpustart,rhomaxnow,nsteps,&
     else
        call write_smalldump(time,dumpfile)
     endif
-    if (use_apr) call write_aprtrack(time,dumpfile)
+    if (use_apr) call write_aprtrack(time,dumpfile,evfile)
  endif
  call get_timings(t2,tcpu2)
  call increment_timer(itimer_io,t2-t1,tcpu2-tcpu1)
