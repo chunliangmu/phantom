@@ -46,6 +46,12 @@ contains
 !  code but with a fake equation of state, low neighbour number
 !  and fixing the entropy as a function of r
 !
+!  For tabulated EoSs (currently ieos=10, MESA) the relaxation instead runs with the real EoS
+!  and fixes the EoS-consistent thermal energy u(m) on the mass coordinate,
+!  so the relaxed state is the equilibrium of the actual gas
+!  (for MESA, u contains the recombination reservoir,
+!  and swapping in that u after relaxing a gamma=5/3 gas changes the energetics at hand-off)
+!
 !  IN:
 !    rhotab(nt) - tabulated density as function of r (in code units)
 !    pr(nt)     - tabulated pressure as function of r (in code units)
@@ -60,7 +66,8 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  use table_utils,     only:yinterp
  use deriv,           only:get_derivs_global
  use dim,             only:maxp,maxvxyzu,gr,gravity,use_apr
- use part,            only:vxyzu,rad,eos_vars,massoftype,igas,apr_level,fxyzu,init_rho_from_h
+ use part,            only:vxyzu,rad,eos_vars,massoftype,igas,igasP,apr_level,&
+                           fxyzu,init_rho_from_h,rho,aprmassoftype
  use step_lf_global,  only:init_step,step
  use initial,         only:initialise
  use memory,          only:allocate_memory
@@ -69,8 +76,10 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  use io,              only:error,warning,fatal,id,master
  use fileutils,       only:getnextfilename
  use readwrite_dumps, only:write_fulldump
- use eos,             only:gamma,eos_outputs_mu,ieos,eos_has_pressure_without_u,polyk
+ use eos,             only:calc_temp_and_ene,gamma,eos_outputs_mu,ieos,&
+                           eos_has_pressure_without_u,polyk
  use physcon,         only:pi
+ use units,           only:unit_density,unit_ergg,unit_pressure
  use options,         only:iexternalforce
  use io_summary,      only:summary_initialise
  use setstar_utils,   only:set_star_thermalenergy,set_star_composition
@@ -88,11 +97,12 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  logical,           intent(in),  optional :: write_dumps
  real,              intent(out), optional :: density_error,energy_error
  real,              intent(in),  optional :: mtab(nt)
- integer :: nits,nerr,nwarn,iunit,i1
+ integer :: nits,nerr,nwarn,iunit,i1,i,j,ierr_eos
  real    :: t,dt,dtmax,rmserr,rstar,mstar,tdyn,x0(3),mtot
  real    :: entrop(nt),utherm(nt),mr(nt),rmax,dtext,dtnew
+ real    :: eni,tempi,virsum,pmassi
  logical :: converged,use_step,restart
- logical, parameter :: fix_entrop = .true. ! fix entropy instead of thermal energy
+ logical :: fix_entrop,use_eos_relax
  logical :: write_files
  character(len=20) :: filename,mylabel
 
@@ -146,6 +156,11 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  endif
 
  call set_options_for_relaxation(tdyn)
+
+ ! special case(s) where we use real eos instead of fake ideal gas one,
+ ! to improve stellar stability after relaxation
+ use_eos_relax = (maxvxyzu >= 4 .and. ieos == 10 .and. .not.gr)
+ fix_entrop = .not.use_eos_relax
  call summary_initialise()
  if (gr) call shift_star_origin(x0,i1,npart,xyzh,iptmass_core,xyzmh_ptmass)
  !
@@ -184,12 +199,35 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
     utherm = 0.
  end where
 
+ if (use_eos_relax) then
+    !
+    ! calc actual internal energy for profile (instead of using fake idea gas eos)
+    ! e.g. in ieos=10 (tabulated MESA) case, this includes the (exta) recombination energy etc in u
+    !
+    eni   = 0. ! to prevent compiler warnings
+    tempi = 0.
+    do j=1,nt
+       if (rhotab(j) > epsilon(0.) .and. pr(j) > 0.) then
+          call calc_temp_and_ene(ieos_prev,rhotab(j)*unit_density,&
+                                 pr(j)*unit_pressure,eni,tempi,ierr_eos)
+          if (ierr_eos /= 0) call fatal('relax_star','could not invert EoS for the thermal energy profile',&
+             var='ieos',ival=ieos_prev)
+          utherm(j) = eni/unit_ergg
+          if (.not. utherm(j) > 0.) call fatal('relax_star',&
+             'non-finite or negative thermal energy from EoS inversion')
+       else
+          utherm(j) = 0.
+       endif
+    enddo
+ endif
+
  if (any(utherm(1:nt-1) <= 0.) .and. .not.eos_has_pressure_without_u(ieos)) then
     call error('relax_star','relax-o-matic needs non-zero pressure array set in order to work')
     call restore_original_options(i1,npart)
     ierr = ierr_no_pressure
     return
  endif
+ ! approximate density (instead of properly calc from number density h)
  call init_rho_from_h(i1+1,npart)
  call reset_u_and_get_errors(i1,npart,xyzh,vxyzu,x0,rad,nt,mr,rhotab,&
                              utherm,entrop,fix_entrop,rmax,rmserr)
@@ -205,13 +243,44 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  !
  ! perform sanity checks
  !
- if (etherm > abs(epot) .and. ieos /= 9) then
-    call error('relax_star','cannot relax star because it is unbound (etherm > epot)')
-    if (id==master) print*,' Etherm = ',etherm,' Epot = ',Epot
-    if (maxvxyzu < 4) print "(/,a,/)",' *** Try compiling with ISOTHERMAL=no instead... ***'
-    call restore_original_options(i1,npart)
-    ierr = ierr_unbound
-    return
+ if (use_eos_relax) then
+    !
+    ! for a tabulated EoS, u contains the recombination/dissociation energy reservoir,
+    ! so etherm can exceed |epot|.
+    ! We instead use the virial theorem 3*int P/rho dm = |W| for a star with a free surface
+    ! (surface pressure term negligible here) as the hydrostatic criterion.
+    !
+    virsum = 0.
+    do i=i1+1,npart
+       if (use_apr) then
+          pmassi = aprmassoftype(igas,apr_level(i))
+       else
+          pmassi = massoftype(igas)
+       endif
+       if (rho(i) > tiny(rho)) virsum = virsum + pmassi*eos_vars(igasP,i)/rho(i)
+    enddo
+    if (id==master) print "(3(a,1pg11.3))",&
+       ' 3*int P/rho dm = ',3.*virsum,'  |Epot| = ',abs(epot),&
+       '  virial ratio = ',3.*virsum/abs(epot)
+    ! the threshold matches the permissiveness of the etherm > |epot| check below:
+    ! for a gamma=5/3 gas, 3*int P/rho dm = 2*etherm, so that check allows virial ratios up to 2.
+    ! The equilibrium of a relaxed star sits at a ratio ~1
+    if (3.*virsum > 2.*abs(epot)) then
+       call error('relax_star','cannot relax star: pressure integral exceeds binding energy (virial ratio > 1)')
+       if (id==master) print*,' 3*int P/rho dm = ',3.*virsum,' Epot = ',epot
+       call restore_original_options(i1,npart)
+       ierr = ierr_unbound
+       return
+    endif
+ else
+    if (etherm > abs(epot) .and. ieos /= 9) then
+       call error('relax_star','cannot relax star because it is unbound (etherm > epot)')
+       if (id==master) print*,' Etherm = ',etherm,' Epot = ',Epot
+       if (maxvxyzu < 4) print "(/,a,/)",' *** Try compiling with ISOTHERMAL=no instead... ***'
+       call restore_original_options(i1,npart)
+       ierr = ierr_unbound
+       return
+    endif
  endif
  if (id==master) print "(/,3(a,1pg11.3),/,a,1pg11.3,a,i0)",&
    ' RELAX-A-STAR-O-MATIC: Etherm:',etherm,' Epot:',Epot, ' R*:',maxval(r), &
@@ -446,8 +515,8 @@ end subroutine shift_star_origin
 subroutine reset_u_and_get_errors(i1,npart,xyzh,vxyzu,x0,rad,nt,mr,rhotab,&
                                   utherm,entrop,fix_entrop,rmax,rmserr)
  use table_utils,   only:yinterp
- use part,          only:rho,maxvxyzu
- use dim,           only:do_radiation
+ use part,          only:rho,maxvxyzu,igas,massoftype,aprmassoftype,apr_level
+ use dim,           only:do_radiation,use_apr
  use eos,           only:gamma
  use setstar_utils, only:get_mass_coord
  integer, intent(in)    :: i1,npart,nt
@@ -455,7 +524,7 @@ subroutine reset_u_and_get_errors(i1,npart,xyzh,vxyzu,x0,rad,nt,mr,rhotab,&
  real,    intent(inout) :: vxyzu(:,:),rad(:,:)
  real,    intent(out)   :: rmax,rmserr
  logical, intent(in)    :: fix_entrop
- real :: ri,rhor,rhoi,rho1,mstar,massri
+ real :: ri,rhor,rhoi,rho1,mstar,massri,pmassi
  real, allocatable :: mass_enclosed_r(:)
  integer :: i
 
@@ -468,13 +537,19 @@ subroutine reset_u_and_get_errors(i1,npart,xyzh,vxyzu,x0,rad,nt,mr,rhotab,&
 
  !$omp parallel do schedule(guided) default(none) &
  !$omp shared(i1,npart,xyzh,vxyzu,x0,mass_enclosed_r,mr,rhotab,utherm,entrop) &
- !$omp shared(fix_entrop,gamma,rho) &
- !$omp private(i,ri,rhor,rhoi,massri) &
+ !$omp shared(fix_entrop,gamma,rho,apr_level,aprmassoftype) &
+ !$omp private(i,ri,rhor,rhoi,massri,pmassi) &
  !$omp reduction(+:rmserr) &
  !$omp reduction(max:rmax)
  do i = i1+1,npart
+    if (use_apr) then
+       pmassi = aprmassoftype(igas,apr_level(i))
+    else
+       pmassi = massoftype(igas)
+    endif
     ri = sqrt(dot_product(xyzh(1:3,i)-x0,xyzh(1:3,i)-x0))
-    massri = mass_enclosed_r(i-i1)
+    ! add half of self mass so we don't get a singularity at the particle closest to the center
+    massri = mass_enclosed_r(i-i1) + pmassi*0.5
     rhor = yinterp(rhotab,mr,massri) ! analytic rho(r)
 
     rhoi = rho(i) ! actual rho
@@ -517,7 +592,11 @@ subroutine set_options_for_relaxation(tdyn)
  !
  ! turn on settings appropriate to relaxation
  !
- if (maxvxyzu >= 4 .and. .not.eos_has_pressure_without_u(ieos)) ieos = 2
+ ! keep the real EoS for tabulated EoSs (currently ieos=10, MESA):
+ ! the relaxation then runs in the actual gas (see relax_star).
+ ! Other EoSs relax with the fake gamma=5/3 gas as before
+ !
+ if (maxvxyzu >= 4 .and. .not.eos_has_pressure_without_u(ieos) .and. ieos /= 10) ieos = 2
  if (tdyn > 0.) then
     idamp = 2
     tdyn_s = tdyn*utime
