@@ -306,10 +306,9 @@ subroutine write_aprtrack(tdump,dumpfile,evfile)
 
  if (ntrack == 0) return ! nothing to do here
 
- ! derive the file prefix from the evfile name, e.g. star01.ev -> star01,
- ! so that the APR tracking file name follows the run/dump numbering
- ! (star01_apr.ev) and does not collide between runs or restarts
- idot = index(evfile,'.ev') - 1
+ ! derive the file prefix from the evfile name, e.g. star01.ev -> star,
+ ! so that the APR tracking file name becomes something like starAPR001.ev
+ idot = index(evfile,'.ev') - 3
  if (idot <= 1) idot = len_trim(evfile)
  fileprefix = evfile(1:idot)
 
@@ -326,7 +325,7 @@ subroutine write_aprtrack(tdump,dumpfile,evfile)
 
   do i = 1,ntrack
     write(padded_ntrack, '(I3.3)') i
-    filename = trim(fileprefix) // '_apr_' // padded_ntrack // '.ev'
+    filename = trim(fileprefix) // 'APR' // padded_ntrack // '.ev'
 
     ! check if the file exists or not
     inquire(file=filename,exist=iexist)
