@@ -313,6 +313,101 @@ end subroutine get_eos_u_from_rhoT_mesa
 
 !----------------------------------------------------------------
 !+
+!  subroutine returns specific entropy given density and internal energy.
+!  Assumes cgs units
+!+
+!----------------------------------------------------------------
+pure subroutine get_eos_s_from_rho_eint_mesa(rho,eint,s)
+ real,    intent(in)  :: rho,eint
+ real,    intent(out) :: s
+
+ call getvalue_mesa(rho,eint,9,s)
+
+end subroutine get_eos_s_from_rho_eint_mesa
+
+!----------------------------------------------------------------
+!+
+!  subroutine returns internal energy from density and specific
+!  entropy using bisection method).
+!
+!  Assumes cgs units.
+!+
+!----------------------------------------------------------------
+subroutine get_eos_u_from_rho_s_mesa(rho,s,u,guesseint)
+ use physcon, only:kb_on_mh
+ use io,      only:fatal
+ real, intent(in)  :: rho,s
+ real, intent(out) :: u
+ real, intent(in), optional :: guesseint
+ real                       :: err,uguess,u1,u2,u3,s1,s2,s3,left,right,mid
+ real, parameter            :: tolerance = 1d-15
+ integer, parameter         :: nextend_max = 1000
+ integer                    :: ierr,nextends
+
+ if (present(guesseint)) then
+    uguess = guesseint
+ else
+    uguess = 0.
+ endif
+ if (.not. uguess > tiny(0.)) then
+    ! order-of-magnitude initial guess, inverting the monotomic ideal-gas
+    ! entropy relation s = (kB/mH) ln(T^1.5/rho) with unit mean molecular
+    ! weight (s is in erg/g/K); the bracket is extended below until it
+    ! contains the root. cap the exponent to avoid overflowing exp
+    uguess = 1.5*kb_on_mh*(rho*exp(min(s/kb_on_mh,700.)))**(2./3.)
+ endif
+
+ u1 = 10.0*uguess  ! Guess upper bound
+ u2 = 0.1*uguess  ! Guess lower bound
+ nextends = 0
+ call getvalue_mesa(rho,u1,9,s1,ierr)
+ call getvalue_mesa(rho,u2,9,s2,ierr)
+ left  = s - s1   ! entropy increases with u, so this is negative if bracketed
+ right = s - s2
+
+ ! If the bounds do not contain the root, extend them until they do
+ do while (left*right > 0.)
+    u1 = 0.99*u1
+    u2 = 1.01*u2
+    nextends = nextends + 1
+    if (nextends > nextend_max) then
+       call fatal('get_eos_u_from_rhos_mesa',&
+          'could not bracket entropy inversion; s or rho may be outside the tables')
+    endif
+    call getvalue_mesa(rho,u1,9,s1,ierr)
+    call getvalue_mesa(rho,u2,9,s2,ierr)
+    left  = s - s1
+    right = s - s2
+ enddo
+
+ ! Start bisecting
+ err = huge(1.)
+ do while (abs(err) > tolerance)
+    call getvalue_mesa(rho,u1,9,s1,ierr)
+    call getvalue_mesa(rho,u2,9,s2,ierr)
+    left  = s - s1
+    right = s - s2
+    u3 = 0.5*(u1+u2)
+    call getvalue_mesa(rho,u3,9,s3,ierr)
+    mid = s - s3
+
+    if (left*mid < 0.) then
+       u2 = u3
+    elseif (right*mid < 0.) then
+       u1 = u3
+    elseif (mid == 0.) then
+       u = u3
+       exit
+    endif
+
+    u = u3
+    err = (u2 - u1)/u1
+ enddo
+
+end subroutine get_eos_u_from_rho_s_mesa
+
+!----------------------------------------------------------------
+!+
 !  subroutine returns various quantities as
 !  a function of density/internal energy
 !+

@@ -83,6 +83,7 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  use options,         only:iexternalforce
  use io_summary,      only:summary_initialise
  use setstar_utils,   only:set_star_thermalenergy,set_star_composition
+ use eos_mesa,        only:get_eos_s_from_rho_eint_mesa,get_eos_u_from_rho_s_mesa
  use apr,             only:init_apr,update_apr
  use neighkdtree,     only:allocate_neigh
  integer,           intent(in)    :: nt,iptmass_core
@@ -160,7 +161,7 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  ! special case(s) where we use real eos instead of fake ideal gas one,
  ! to improve stellar stability after relaxation
  use_eos_relax = (maxvxyzu >= 4 .and. ieos == 10 .and. .not.gr)
- fix_entrop = .not.use_eos_relax
+ fix_entrop = .true.
  call summary_initialise()
  if (gr) call shift_star_origin(x0,i1,npart,xyzh,iptmass_core,xyzmh_ptmass)
  !
@@ -187,18 +188,6 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
     call update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  endif
 
- !
- ! define utherm(r) based on P(r) and rho(r)
- ! and use this to set the thermal energy of all particles
- !
- where (rhotab > epsilon(0.) .and. gamma > 1.)
-    entrop = pr/rhotab**gamma
-    utherm = pr/(rhotab*(gamma-1.))
- elsewhere
-    entrop = 0.
-    utherm = 0.
- end where
-
  if (use_eos_relax) then
     !
     ! calc actual internal energy for profile (instead of using fake idea gas eos)
@@ -208,17 +197,31 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
     tempi = 0.
     do j=1,nt
        if (rhotab(j) > epsilon(0.) .and. pr(j) > 0.) then
-          call calc_temp_and_ene(ieos_prev,rhotab(j)*unit_density,&
-                                 pr(j)*unit_pressure,eni,tempi,ierr_eos)
-          if (ierr_eos /= 0) call fatal('relax_star','could not invert EoS for the thermal energy profile',&
-             var='ieos',ival=ieos_prev)
+          call calc_temp_and_ene(ieos_prev,rhotab(j)*unit_density,pr(j)*unit_pressure,eni,tempi,ierr_eos)
+          if (ierr_eos /= 0) call fatal('relax_star',&
+             'could not invert EoS for the thermal energy profile',var='ieos',ival=ieos_prev)
           utherm(j) = eni/unit_ergg
           if (.not. utherm(j) > 0.) call fatal('relax_star',&
              'non-finite or negative thermal energy from EoS inversion')
+          call get_eos_s_from_rho_eint_mesa(rhotab(j)*unit_density,utherm(j)*unit_ergg,entrop(j))
+          if (.not. entrop(j) > 0.) call fatal('relax_star','non-finite or negative entropy from EoS')
        else
           utherm(j) = 0.
+          entrop(j) = 0.
        endif
     enddo
+ else
+    !
+    ! define utherm(r) based on P(r) and rho(r)
+    ! and use this to set the thermal energy of all particles
+    !
+    where (rhotab > epsilon(0.) .and. gamma > 1.)
+       entrop = pr/rhotab**gamma
+       utherm = pr/(rhotab*(gamma-1.))
+    elsewhere
+       entrop = 0.
+       utherm = 0.
+    end where
  endif
 
  if (any(utherm(1:nt-1) <= 0.) .and. .not.eos_has_pressure_without_u(ieos)) then
@@ -446,7 +449,7 @@ subroutine shift_particles(i1,npart,xyzh,vxyzu,dtmin)
  dtmin = huge(dtmin)
  nlargeshift = 0
  !$omp parallel do schedule(guided) default(none) &
-!$omp shared(i1,npart,xyzh,vxyzu,fxyzu,fext,xyzmh_ptmass,nptmass,ieos,rho) &
+ !$omp shared(i1,npart,xyzh,vxyzu,fxyzu,fext,xyzmh_ptmass,nptmass,ieos,rho) &
  !$omp private(i,dx,dti,phi,cs,rhoi,hi) &
  !$omp reduction(min:dtmin) &
  !$omp reduction(+:nlargeshift)
@@ -516,15 +519,20 @@ subroutine reset_u_and_get_errors(i1,npart,xyzh,vxyzu,x0,rad,nt,mr,rhotab,&
                                   utherm,entrop,fix_entrop,rmax,rmserr)
  use table_utils,   only:yinterp
  use part,          only:rho,maxvxyzu,igas,massoftype,aprmassoftype,apr_level
- use dim,           only:do_radiation,use_apr
+ use dim,           only:do_radiation,use_apr,gr
+ use units,         only:unit_density,unit_ergg
  use eos,           only:gamma
+ use options,       only:ieos
  use setstar_utils, only:get_mass_coord
+ use units,         only:unit_density,unit_ergg
+ use eos_mesa,      only:get_eos_u_from_rho_s_mesa
  integer, intent(in)    :: i1,npart,nt
  real,    intent(in)    :: xyzh(:,:),x0(3),mr(nt),rhotab(nt),utherm(nt),entrop(nt)
  real,    intent(inout) :: vxyzu(:,:),rad(:,:)
  real,    intent(out)   :: rmax,rmserr
  logical, intent(in)    :: fix_entrop
  real :: ri,rhor,rhoi,rho1,mstar,massri,pmassi
+ real :: target_s,u_cgs,u_guess
  real, allocatable :: mass_enclosed_r(:)
  integer :: i
 
@@ -536,9 +544,9 @@ subroutine reset_u_and_get_errors(i1,npart,xyzh,vxyzu,x0,rad,nt,mr,rhotab,&
  mstar = mr(nt)
 
  !$omp parallel do schedule(guided) default(none) &
- !$omp shared(i1,npart,xyzh,vxyzu,x0,mass_enclosed_r,mr,rhotab,utherm,entrop) &
- !$omp shared(fix_entrop,gamma,rho,apr_level,aprmassoftype) &
- !$omp private(i,ri,rhor,rhoi,massri,pmassi) &
+ !$omp shared(i1,npart,xyzh,vxyzu,x0,mass_enclosed_r,mr,rhotab,utherm,entrop,ieos) &
+ !$omp shared(fix_entrop,gamma,rho,apr_level,massoftype,aprmassoftype,unit_density,unit_ergg) &
+ !$omp private(i,ri,rhor,rhoi,massri,pmassi,target_s,u_cgs,u_guess) &
  !$omp reduction(+:rmserr) &
  !$omp reduction(max:rmax)
  do i = i1+1,npart
@@ -554,7 +562,15 @@ subroutine reset_u_and_get_errors(i1,npart,xyzh,vxyzu,x0,rad,nt,mr,rhotab,&
 
     rhoi = rho(i) ! actual rho
     if (maxvxyzu >= 4) then
-       if (fix_entrop .and. gamma > 1.) then
+       if (fix_entrop .and. ieos==10 .and. .not.gr) then
+          ! Use tabulated MESA EoS
+          target_s = yinterp(entrop,mr,massri)
+          u_guess = vxyzu(4,i)
+          if (.not. u_guess > tiny(0.)) u_guess = yinterp(utherm,mr,massri)
+          call get_eos_u_from_rho_s_mesa(rhoi*unit_density,target_s,u_cgs,&
+                                        guesseint=u_guess*unit_ergg)
+          vxyzu(4,i) = u_cgs/unit_ergg
+       else if (fix_entrop .and. gamma > 1.) then
           vxyzu(4,i) = (yinterp(entrop,mr,massri)*rhoi**(gamma-1.))/(gamma-1.)
        else
           vxyzu(4,i) = yinterp(utherm,mr,massri)
