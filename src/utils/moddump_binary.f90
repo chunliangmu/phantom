@@ -50,7 +50,7 @@ module moddump
 !   - use_corotating_frame : *transform to a corotating frame*
 !   - vel_shift            : *velocity to add in the direction of the primary [code units]*
 !
-! :Dependencies: centreofmass, dim, eos, extern_corotate,
+! :Dependencies: apr, centreofmass, dim, eos, extern_corotate,
 !   extern_gwinspiral, externalforces, infile_utils, io, moddump_utils,
 !   options, part, physcon, prompting, readwrite_dumps, readwrite_mesa,
 !   setbinary, table_utils, timestep, units, vectorutils
@@ -126,7 +126,8 @@ contains
 subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  use part,              only:nptmass,xyzmh_ptmass,vxyz_ptmass,ihacc,ihsoft,igas, &
                              delete_dead_or_accreted_particles,mhd,rho,shuffle_part,&
-                             kill_particle,copy_particle,aprmassoftype,apr_level
+                             kill_particle,copy_particle,get_pmass,iphase,iamtype,apr_level,&
+                             isdead_or_accreted
  use setbinary,         only:set_binary
  use units,             only:utime
  use physcon,           only:pi
@@ -138,7 +139,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  use extern_gwinspiral, only:Nstar_gw
  use table_utils,       only:yinterp
  use readwrite_mesa,    only:read_mesa
- use dim,               only:maxptmass,maxp,nsinkproperties,use_apr
+ use dim,               only:maxptmass,maxp,maxphase,nsinkproperties,use_apr
  use io,                only:fatal,idisk1,iprint
  use infile_utils,      only:open_db_from_file,inopts,read_inopt,close_db
  use moddump_utils,     only:get_moddump_options
@@ -195,7 +196,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
     nptmass1 = nptmass
     nstar1 = npart
     pmass1 = massoftype(igas)
-    m1 = nstar1 * pmass1
+    m1 = total_gas_mass()  ! sum of the (possibly unequal, APR) particle masses
     ! primary sink properties (zero if the dump has no sink, i.e. no accretion radius)
     xyzmh1_stash = 0.
     vxyz1_stash  = 0.
@@ -366,7 +367,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
                 (xyzh(2,i)-xyzh(2,irhomax))**2 + &
                 (xyzh(3,i)-xyzh(3,irhomax))**2)
        if (radi < rcut) then
-          xyzmh_ptmass(4,n) = xyzmh_ptmass(4,n) + massoftype(igas)
+          xyzmh_ptmass(4,n) = xyzmh_ptmass(4,n) + get_pmass(i,maxphase /= maxp)
           npartoftype(igas) = npartoftype(igas) - 1
           call kill_particle(i)
        endif
@@ -402,7 +403,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
        mcore = 0.
     endif
 
-    primary_mass = npartoftype(igas) * massoftype(igas) + mcore
+    primary_mass = total_gas_mass() + mcore
 
     call set_triple(primary_mass,cmass1,cmass2,&
                      a1,a2,hacc1,hacc2,hacc3,&
@@ -464,7 +465,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
     endif
 
     ! Centre to new CoM with the companion
-    mass_donor = npartoftype(igas)*massoftype(igas) + primarycore_mass
+    mass_donor = total_gas_mass() + primarycore_mass
     omega_corotate = sqrt((mass_donor + companion_mass)/separation**3)
     newCoM = companion_mass / (mass_donor + companion_mass) * separation
     companion_xpos = separation - newCoM
@@ -511,7 +512,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
     endif
     call close_db(db)
 
-    m1 = npartoftype(igas)*massoftype(igas) + primarycore_mass
+    m1 = total_gas_mass() + primarycore_mass
     m2 = companion_mass
     a = abs(companion_xpos) + abs(primarycore_xpos)
     print*,' Primary mass from existing file = ',m1,' Msun'
@@ -615,6 +616,28 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
     call reset_sink_property(xyzmh_ptmass)
 
  end select
+
+contains
+
+ !----------------------------------------------------------------
+ !+
+ !  total mass of the gas particles in the dump, accounting for
+ !  the unequal particle masses used with adaptive particle refinement
+ !+
+ !----------------------------------------------------------------
+real function total_gas_mass() result(mtot)
+ integer :: k,itype
+ mtot = 0.
+ do k = 1,npart
+    if (isdead_or_accreted(xyzh(4,k))) cycle
+    if (maxphase == maxp) then
+       itype = iamtype(iphase(k))
+    else
+       itype = igas
+    endif
+    if (itype == igas) mtot = mtot + get_pmass(k, maxphase /= maxp)
+ enddo
+end function total_gas_mass
 
 end subroutine modify_dump
 
