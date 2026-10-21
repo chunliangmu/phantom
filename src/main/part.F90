@@ -700,13 +700,15 @@ subroutine init_part
  endif
  ndustsmall = 0
  ndustlarge = 0
- if (track_lum) luminosity = 0.
+ if (maxlum == maxp) luminosity = 0.
  if (use_apr) apr_level = 1 ! this is reset if the simulation is to derefine
  if (do_radiation) then
     rad(:,:) = 0.
     radprop(:,:) = 0.
     radprop(ikappa,:) = huge(0.) ! set opacity to infinity
     radprop(ithick,:) = 1.       ! optically thick, i.e. use diffusion approximation
+    radprop(ilambda,:) = 1./3.   ! diffusion limit before the first implicit solve
+    radprop(iedd,:)    = 1./3.
  endif
  eos_vars(itemp,:) = -1.0 ! initial guess for temperature overridden in eos
 !
@@ -922,7 +924,10 @@ subroutine init_rho_from_h(i1,i2)
           if (iamtypei <= 0) iamtypei = igas
        endif
        if (use_apr) then
-          pmassi = aprmassoftype(iamtypei,apr_level(i))
+          ! NB: aprmassoftype is only populated by init_apr/sync_aprmassoftype, which
+          !     happens after particle setup; compute the level mass directly here so
+          !     that init_rho_from_h is valid inside setup routines too
+          pmassi = massoftype(iamtypei)/(2.**(apr_level(i)-1))
        else
           pmassi = massoftype(iamtypei)
        endif
@@ -1562,7 +1567,10 @@ subroutine combine_two_particles(keep,discard)
  rho(keep) = factor*(rho(keep) + rho(discard))
  if (maxphase ==maxp .and. (iphase(keep) /= iphase(discard))) make_warning = .true.
  if (maxgrav  ==maxp) poten(keep) = poten(keep) + poten(discard)
- if (maxlum   ==maxp) luminosity(keep) = factor*(luminosity(keep) + luminosity(discard))
+ ! luminosity is m*du/dt (extensive): the merged particle carries twice the mass,
+ ! so the two parent luminosities add rather than average (important for the
+ ! p dV work term in the implicit radiation solver)
+ if (maxlum   ==maxp) luminosity(keep) = luminosity(keep) + luminosity(discard)
  if (maxindan==maxp) then
     ibin(keep)       = min(ibin(keep), ibin(discard))
     ibin_old(keep)   = min(ibin_old(keep), ibin_old(discard))

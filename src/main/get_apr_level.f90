@@ -133,6 +133,7 @@ subroutine set_new_splitpart(i,i_new,v,sep)
 
  !--create the new particle
  call copy_particle_all(i,i_new,new_part=.true.)
+ call set_split_luminosity(i,i_new)
  xyzh(1,i_new) = xyzh(1,i) + x_add
  xyzh(2,i_new) = xyzh(2,i) + y_add
  xyzh(3,i_new) = xyzh(3,i) + z_add
@@ -154,6 +155,26 @@ subroutine set_new_splitpart(i,i_new,v,sep)
  if (ind_timesteps) call put_in_smallest_bin(i)
 
 end subroutine set_new_splitpart
+
+!-----------------------------------------------------------------------
+!+
+!  radiation bookkeeping for a split: luminosity (when allocated)
+!  stores m*du/dt, so both children carry half of the parent's value.
+!  (For the implicit radiation solver this feeds the p dV work term.)
+!+
+!-----------------------------------------------------------------------
+subroutine set_split_luminosity(i,i_new)
+ use part, only:luminosity
+ use dim,  only:maxlum,maxp
+ integer, intent(in) :: i,i_new
+
+ ! luminosity is allocated with size zero when it is not in use
+ if (maxlum == maxp) then
+    luminosity(i)     = 0.5*luminosity(i)
+    luminosity(i_new) = 0.5*luminosity(i_new)
+ endif
+
+end subroutine set_split_luminosity
 
 !-----------------------------------------------------------------------
 !+
@@ -283,6 +304,7 @@ subroutine split_dir_two(i,i_new,sepin)
 
  apr_level(i) = apr_level(i) + int(1,kind=1) ! to prevent compiler warnings
  call copy_particle_all(i,i_new,new_part=.true.)
+ call set_split_luminosity(i,i_new)
  pmass = aprmassoftype(igas,apr_level(i))
 
  uold = vxyzu(4,i)
@@ -326,6 +348,7 @@ subroutine split_dir_gr(i,i_new,sepin)
 
  apr_level(i) = apr_level(i) + int(1,kind=1) ! to prevent compiler warnings
  call copy_particle_all(i,i_new,new_part=.true.)
+ call set_split_luminosity(i,i_new)
  pmass = aprmassoftype(igas,apr_level(i))
 
  uold = vxyzu(4,i)

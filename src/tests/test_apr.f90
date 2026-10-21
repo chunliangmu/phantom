@@ -15,8 +15,8 @@ module testapr
 ! :Runtime parameters: None
 !
 ! :Dependencies: allocutils, apr, boundary, deriv, dim, dust_formation,
-!   energies, eos, io, mpidomain, mpiutils, part, random, testutils,
-!   unifdis, units, utils_apr
+!   energies, eos, io, mpidomain, mpiutils, part, partinject, random,
+!   testutils, unifdis, units, utils_apr
 !
  use testutils, only:checkval,update_test_scores
  use io,        only:id,master,fatal
@@ -35,23 +35,25 @@ contains
 subroutine test_apr(ntests,npass)
  use unifdis,      only:set_unifdis
  use boundary,     only:dxbound,dybound,dzbound,xmin,xmax,ymin,ymax,zmin,zmax
- use part,         only:npart,npartoftype,hfact,xyzh,init_part,massoftype,radprop
+ use part,         only:npart,npartoftype,hfact,xyzh,init_part,massoftype,radprop,rad,iradxi
+ use part,         only:luminosity
  use part,         only:isetphase,igas,iphase,vxyzu,fxyzu,apr_level,maxvxyzu,init_rho_from_h
  use part,         only:rho,igasP,eos_vars
  use mpidomain,    only:i_belong
  use mpiutils,     only:reduceall_mpi
- use dim,          only:periodic,use_apr,do_radiation
+ use dim,          only:periodic,use_apr,do_radiation,maxlum,maxp
  use apr,          only:update_apr
  use utils_apr,    only:apr_centre,apr_max
- use energies,     only:compute_energies,angtot,etot,totmom,ekin,etherm
+ use energies,     only:compute_energies,angtot,etot,totmom,ekin,etherm,erad
  use random,       only:ran2
  use eos,          only:gamma
  use deriv,        only:get_density_global
  integer, intent(inout) :: ntests,npass
  real :: psep,rhozero,time,totmass, etotin, totmomin
- real :: angtotin, ekinin, ethermin
+ real :: angtotin, ekinin, ethermin, eradin
  real :: tolang, tolen, tolmom, hcoarse,hfine,tot_entropy, rhoi, tolent, entropin
- integer :: original_npart,splitted,nfailed(13),i,iseed,ncoarse,nfine,tolpart
+ real :: totlumin,totlumin0,tol_lum
+ integer :: original_npart,splitted,nfailed(17),i,iseed,iseed_rad,ncoarse,nfine,tolpart
 
  if (use_apr) then
     if (id==master) write(*,"(/,a)") '--> TESTING APR MODULE'
@@ -62,11 +64,17 @@ subroutine test_apr(ntests,npass)
 
  ! Tolerances
  tolmom = 2.e-15
- tolang = 3.0e-14
+ tolang = 1.0e-13  ! allows for different OpenMP reduction orders in the global sums
  tolen  = 2.e-15
  tolent = 2.0E-15
+ ! entropy is not conserved by construction in a merge (the entropy-adjustment
+ ! machinery has been removed); with the non-periodic test geometry the residual
+ ! is larger than in the periodic CI configuration
+ if (.not.periodic) tolent = 5.0E-5
+ tol_lum = 1.0E-6  ! luminosity is stored in single precision
  nfailed(:) = 0
  iseed = -92757
+ iseed_rad = -13579
  gamma = 5./3.
 
  ! Set up a uniform box of particles
@@ -89,7 +97,23 @@ subroutine test_apr(ntests,npass)
  ! this is to prevent a (reasonable) problem when running this test with DEBUG=yes and radiation
  if (do_radiation) then
     radprop(4,:) = 23.0421 ! just some inconsequential number
+    ! non-trivial radiation energy so that the energy-conservation checks below
+    ! also test the radiation arrays across splits and merges
+    do i=1,npart
+       rad(iradxi,i) = 1.e-3*(1. + 0.5*ran2(iseed_rad))
+    enddo
  endif
+ ! luminosity is an extensive quantity (m*du/dt): it must also be conserved
+ ! by splits and merges (this is the p dV input to the implicit radiation solver)
+ if (maxlum == maxp) then
+    do i=1,npart
+       luminosity(i) = real(1.e-3*(1. + 0.5*ran2(iseed_rad)),kind=kind(luminosity))
+    enddo
+ endif
+
+ ! derefinement must preserve the setup mass and radiation energy when
+ ! massoftype is converted to the level-1 (coarsest-particle) mass
+ call test_apr_deref_init(ntests,npass)
 
  ! Set some random velocities
  do i=1,npart
@@ -155,6 +179,9 @@ subroutine test_apr(ntests,npass)
  ekinin = ekin
  ethermin = etherm
  entropin = tot_entropy
+ eradin   = erad
+ totlumin0 = 0.
+ if (maxlum == maxp) call calc_luminosity(npart,luminosity,totlumin0)
 
  ! Now set for a split
  write(*,"(/,a)") '--> conducting a split'
@@ -174,6 +201,11 @@ subroutine test_apr(ntests,npass)
  call checkval(ekin,ekinin,tolen,nfailed(4),'kinetic energy')
  call checkval(etherm,ethermin,tolen,nfailed(5),'thermal energy')
  call checkval(tot_entropy,entropin,tolent,nfailed(6),'total entropy')
+ if (do_radiation) call checkval(erad,eradin,tolen,nfailed(16),'radiation energy (split)')
+ if (maxlum == maxp) then
+    call calc_luminosity(npart,luminosity,totlumin)
+    call checkval(totlumin,totlumin0,tol_lum,nfailed(14),'total luminosity (split)')
+ endif
  call update_test_scores(ntests,nfailed(1:6),npass)
 
  ! after splitting, the total number of particles should have been updated
@@ -193,6 +225,11 @@ subroutine test_apr(ntests,npass)
  call checkval(ekin,ekinin,tolen,nfailed(10),'kinetic energy')
  call checkval(etherm,ethermin,tolen,nfailed(11),'thermal energy')
  call checkval(tot_entropy,entropin,tolent,nfailed(12),'total entropy')
+ if (do_radiation) call checkval(erad,eradin,tolen,nfailed(17),'radiation energy (merge)')
+ if (maxlum == maxp) then
+    call calc_luminosity(npart,luminosity,totlumin)
+    call checkval(totlumin,totlumin0,tol_lum,nfailed(15),'total luminosity (merge)')
+ endif
 
  ! Check that the original particle number returns
  tolpart = (apr_max-1)*6 ! this corresponds to a maximum of 11 "spare" particles per level
@@ -392,6 +429,69 @@ end subroutine get_dust_moment_sums
 
 !--------------------------------------------
 !+
+!  Check mass and radiation conservation when ref_dir=-1 is initialised
+!  from an untagged (uniform-mass) particle setup.
+!+
+!--------------------------------------------
+subroutine test_apr_deref_init(ntests,npass)
+ use part,      only:npart,massoftype,igas,apr_level,rad,iradxi,get_pmass
+ use apr,       only:init_apr,sync_aprmassoftype
+ use utils_apr, only:apr_type,apr_rad,apr_max,apr_max_in,ref_dir,ntrack,split_dir,apr_start_coarse
+ use dim,       only:do_radiation
+ use mpiutils,  only:reduceall_mpi
+ integer, intent(inout) :: ntests,npass
+ integer :: ierr,i,nfailed(4),ref_dir_old
+ real :: mass0,mtot0,mtot1,erad0,erad1,pmassi,tol_sum
+ logical :: apr_start_coarse_old
+
+ if (id==master) write(*,"(/,a)") '--> checking ref_dir=-1 initial mass and radiation conservation'
+
+ mass0 = massoftype(igas)
+ mtot0 = mass0*reduceall_mpi('+',npart)
+ erad0 = 0.
+ if (do_radiation) erad0 = reduceall_mpi('+',mass0*sum(rad(iradxi,1:npart)))
+ ref_dir_old = ref_dir
+ apr_start_coarse_old = apr_start_coarse
+
+ apr_max_in = 1
+ ref_dir = -1
+ apr_type = -1
+ apr_rad = 0.2
+ ntrack = 2
+ split_dir = 1
+ apr_start_coarse = .false.
+ call init_apr(apr_level,ierr)
+
+ mtot1 = 0.
+ erad1 = 0.
+ do i=1,npart
+    pmassi = get_pmass(i,.true.)
+    mtot1 = mtot1 + pmassi
+    if (do_radiation) erad1 = erad1 + pmassi*rad(iradxi,i)
+ enddo
+ mtot1 = reduceall_mpi('+',mtot1)
+ if (do_radiation) erad1 = reduceall_mpi('+',erad1)
+
+ nfailed = 0
+ tol_sum = epsilon(1.)*max(1,npart)  ! allow roundoff in the serial particle sums
+ call checkval(ierr,0,0,nfailed(1),'ref_dir=-1 initialisation')
+ call checkval(all(apr_level(1:npart) == apr_max) .and. massoftype(igas) == 2.*mass0,.true.,&
+               nfailed(2),'level and base-mass initialisation')
+ call checkval(mtot1,mtot0,tol_sum,nfailed(3),'total mass after base-mass rescaling')
+ if (do_radiation) call checkval(erad1,erad0,tol_sum,nfailed(4),'radiation energy after base-mass rescaling')
+ call update_test_scores(ntests,nfailed,npass)
+
+ ! restore the untagged setup; the regular APR test initialises its own regions next
+ massoftype(igas) = mass0
+ apr_level(1:npart) = 1
+ ref_dir = ref_dir_old
+ apr_start_coarse = apr_start_coarse_old
+ call sync_aprmassoftype()
+
+end subroutine test_apr_deref_init
+
+!--------------------------------------------
+!+
 !  Set up an APR region that is used in other tests
 !+
 !--------------------------------------------
@@ -415,6 +515,19 @@ subroutine setup_apr_region_for_test()
  call init_apr(apr_level,ierr)
 
 end subroutine setup_apr_region_for_test
+
+subroutine calc_luminosity(npart,luminosity,totlumin)
+ integer, intent(in) :: npart
+ real(kind=4), intent(in) :: luminosity(:)
+ real,    intent(out) :: totlumin
+ integer :: ii
+
+ totlumin = 0.
+ do ii=1,npart
+    totlumin = totlumin + luminosity(ii)
+ enddo
+
+end subroutine calc_luminosity
 
 subroutine calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
  use part, only:igasP,igas,aprmassoftype,rho

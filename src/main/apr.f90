@@ -92,6 +92,10 @@ subroutine init_apr(apr_level,ierr)
     ! largest particle (don't do it twice accidentally!)
     if (ref_dir == -1) then
        if (.not. apr_start_coarse) then
+          ! The particles were just assigned to apr_max, so their physical mass
+          ! massoftype/2**(apr_max-1) is unchanged by this rescaling.  Density,
+          ! specific internal energy and specific radiation energy therefore
+          ! remain valid; in particular rad(iradxi) must not be rescaled.
           massoftype(:) = massoftype(:) * 2.**(apr_max -1)
        endif
        top_level = 1
@@ -351,19 +355,19 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
        ! now go through and actually split them - this should *probably* not be parallelised
        ! due to the content of the nested functions, idx_len probably isn't that long either
-        do ii = 1,idx_len
-           mm = idx_split(ii) ! original particle that should be split
-           kk = npartold + ii ! location in array for new particle
-           if (adjusted_split) then
-              call splitpart(mm,kk,rneigh=rneighs(ii))
-           else
-              call splitpart(mm,kk)
-           endif
-           if (relax_in_loop) then
-              relaxlist(nrelax + ii) = mm
-              relaxlist(nrelax + n_to_split + ii) = kk
-           endif
-        enddo
+       do ii = 1,idx_len
+          mm = idx_split(ii) ! original particle that should be split
+          kk = npartold + ii ! location in array for new particle
+          if (adjusted_split) then
+             call splitpart(mm,kk,rneigh=rneighs(ii))
+          else
+             call splitpart(mm,kk)
+          endif
+          if (relax_in_loop) then
+             relaxlist(nrelax + ii) = mm
+             relaxlist(nrelax + n_to_split + ii) = kk
+          endif
+       enddo
 
        ! if relaxing, update the total number that will be relaxed
        if (relax_in_loop) nrelax = nrelax + 2*n_to_split

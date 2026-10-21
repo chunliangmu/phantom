@@ -30,7 +30,7 @@ module setup
 !   setup_params, timestep, unifdis, units
 !
  use setup_params,    only:rhozero
- use dim,             only:gr
+ use dim,             only:gr,maxp
  use radiation_utils, only:exchange_radiation_energy,limit_radiation_flux
  implicit none
  public :: setpart
@@ -54,8 +54,9 @@ subroutine setpart(id,npart,npartoftype,xyzh,massoftype,vxyzu,polyk,gamma,hfact,
  use boundary,      only:xmin,ymin,zmin,xmax,ymax,zmax,dxbound,dybound,dzbound,set_boundary
  use physcon,       only:pi,mass_proton_cgs,kboltz,years,pc,solarm,c,Rg,steboltz
  use set_dust,      only:set_dustfrac
- use units,         only:set_units,unit_ergg,unit_velocity,unit_opacity,get_c_code,get_radconst_code
- use part,          only:rho,igas,rad,radprop,ithick,iradxi,ikappa,periodic,init_rho_from_h
+ use units,         only:set_units,unit_velocity,unit_opacity,get_c_code,get_radconst_code
+ use part,          only:rho,igas,rad,radprop,ithick,iradxi,ikappa,periodic,init_rho_from_h,&
+                        iphase,maxphase,isetphase
  use eos,           only:gmw
  use kernel,        only:hfact_default
  use timestep,      only:dtmax,tmax,C_rad
@@ -120,6 +121,13 @@ subroutine setpart(id,npart,npartoftype,xyzh,massoftype,vxyzu,polyk,gamma,hfact,
  if (id==master) print*,' particle mass = ',massoftype(igas)
  if (id==master) print*,' initial sound speed = ',cs0,' pressure = ',cs0**2/gamma
 
+ !--particle types must be set before init_rho_from_h/APR masses are used
+ if (maxphase==maxp) then
+    do i=1,npart
+       iphase(i) = isetphase(igas,iactive=.true.)
+    enddo
+ endif
+
  vxyzu(1:3,:) = 0.
 
  c_code = get_c_code()
@@ -146,7 +154,7 @@ subroutine setpart(id,npart,npartoftype,xyzh,massoftype,vxyzu,polyk,gamma,hfact,
     radprop(ithick,:) = 1.
     do i=1,npart
        rhoi = rho(i)
-       vxyzu(4,i) = (Tref/cv1)/(unit_ergg)
+       vxyzu(4,i) = Tref/cv1
        xi0 = a*Tref**4.0/rhoi
        radprop(ikappa,i) = kappa_code
        rad(iradxi,i) = xi0*(1 + 1e-1*sin(xyzh(1,i)*2*pi/(xmax-xmin)))
@@ -163,7 +171,7 @@ subroutine setpart(id,npart,npartoftype,xyzh,massoftype,vxyzu,polyk,gamma,hfact,
     radprop(ithick,:) = 1.
     do i=1,npart
        rhoi = rho(i)
-       vxyzu(4,i) = (Tref/cv1)/(unit_ergg)
+       vxyzu(4,i) = Tref/cv1
        xi0 = a*Tref**4.0/rhoi
        radprop(ikappa,i) = kappa_code
        rad(iradxi,i) = xi0*exp(-500.*xyzh(1,i)**2)
