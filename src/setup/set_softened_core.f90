@@ -15,7 +15,7 @@ module setsoftenedcore
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: eos, eos_mesa, io, physcon, setcubiccore,
+! :Dependencies: dim, eos, eos_mesa, io, physcon, setcubiccore,
 !   setfixedentropycore, table_utils
 !
  implicit none
@@ -33,6 +33,7 @@ contains
 subroutine set_softened_core(eos_type,isoftcore,isofteningopt,regrid_core,rcore,mcore,r,den,pres,m,X,Y,ierr)
  use eos,                 only:X_in,Z_in,init_eos,gmw,get_mean_molecular_weight
  use eos_mesa,            only:init_eos_mesa
+ use dim,                 only:do_radiation
  use io,                  only:fatal
  use table_utils,         only:interpolator,yinterp,flip_array
  use setcubiccore,        only:set_cubic_core,find_mcore_given_rcore,&
@@ -89,7 +90,16 @@ subroutine set_softened_core(eos_type,isoftcore,isofteningopt,regrid_core,rcore,
     Z_in = Zcore
     if (ierr /= 0) call fatal('set_softened_core','could not initialise equation of state')
  endif
- call init_eos(eos_type,ierr)  ! need to initialise EoS again with newfound composition (also needed for iopacity_type = 1)
+ ! need to initialise EoS again with newfound composition (also needed for iopacity_type = 1)
+ if (do_radiation .and. eos_type == 12) then
+    ! ieos=12 is used only to invert the total gas+radiation pressure while
+    ! constructing the profile.  It is not a valid runtime EoS with FLD, since
+    ! that would count radiation pressure twice.  Initialise the gas-only EoS
+    ! here; subsequent profile calculations still use eos_type=12.
+    call init_eos(2,ierr)
+ else
+    call init_eos(eos_type,ierr)
+ endif
 
  if (regrid_core) then
     ! make copy of original arrays
