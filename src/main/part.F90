@@ -922,7 +922,10 @@ subroutine init_rho_from_h(i1,i2)
           if (iamtypei <= 0) iamtypei = igas
        endif
        if (use_apr) then
-          pmassi = aprmassoftype(iamtypei,apr_level(i))
+          ! NB: aprmassoftype is only populated by init_apr/sync_aprmassoftype, which
+          !     happens after particle setup; compute the level mass directly here so
+          !     that init_rho_from_h is valid inside setup routines too
+          pmassi = massoftype(iamtypei)/(2.**(apr_level(i)-1))
        else
           pmassi = massoftype(iamtypei)
        endif
@@ -1562,7 +1565,10 @@ subroutine combine_two_particles(keep,discard)
  rho(keep) = factor*(rho(keep) + rho(discard))
  if (maxphase ==maxp .and. (iphase(keep) /= iphase(discard))) make_warning = .true.
  if (maxgrav  ==maxp) poten(keep) = poten(keep) + poten(discard)
- if (maxlum   ==maxp) luminosity(keep) = factor*(luminosity(keep) + luminosity(discard))
+ ! luminosity is m*du/dt (extensive): the merged particle carries twice the mass,
+ ! so the two parent luminosities add rather than average (important for the
+ ! p dV work term in the implicit radiation solver)
+ if (maxlum   ==maxp) luminosity(keep) = luminosity(keep) + luminosity(discard)
  if (maxindan==maxp) then
     ibin(keep)       = min(ibin(keep), ibin(discard))
     ibin_old(keep)   = min(ibin_old(keep), ibin_old(discard))

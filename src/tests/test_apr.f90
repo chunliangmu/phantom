@@ -14,7 +14,7 @@ module testapr
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: apr, boundary, deriv, dim, energies, io, mpidomain,
+! :Dependencies: apr, boundary, deriv, dim, energies, eos, io, mpidomain,
 !   mpiutils, part, random, testutils, unifdis, utils_apr
 !
  use testutils, only:checkval,update_test_scores
@@ -34,7 +34,8 @@ contains
 subroutine test_apr(ntests,npass)
  use unifdis,      only:set_unifdis
  use boundary,     only:dxbound,dybound,dzbound,xmin,xmax,ymin,ymax,zmin,zmax
- use part,         only:npart,npartoftype,hfact,xyzh,init_part,massoftype,radprop
+ use part,         only:npart,npartoftype,hfact,xyzh,init_part,massoftype,radprop,rad,iradxi
+ use part,         only:luminosity
  use part,         only:isetphase,igas,iphase,vxyzu,fxyzu,apr_level,maxvxyzu,init_rho_from_h
  use part,         only:rho,igasP,eos_vars
  use mpidomain,    only:i_belong
@@ -50,7 +51,8 @@ subroutine test_apr(ntests,npass)
  real :: psep,rhozero,time,totmass, etotin, totmomin
  real :: angtotin, ekinin, ethermin
  real :: tolang, tolen, tolmom, hcoarse,hfine,tot_entropy, rhoi, tolent, entropin
- integer :: original_npart,splitted,nfailed(13),i,iseed,ncoarse,nfine,tolpart
+ real :: totlumin,totlumin0,tol_lum
+ integer :: original_npart,splitted,nfailed(15),i,iseed,iseed_rad,ncoarse,nfine,tolpart
 
  if (use_apr) then
     if (id==master) write(*,"(/,a)") '--> TESTING APR MODULE'
@@ -64,8 +66,14 @@ subroutine test_apr(ntests,npass)
  tolang = 3.0e-14
  tolen  = 2.e-15
  tolent = 2.0E-15
+ ! entropy is not conserved by construction in a merge (the entropy-adjustment
+ ! machinery has been removed); with the non-periodic test geometry the residual
+ ! is larger than in the periodic CI configuration
+ if (.not.periodic) tolent = 5.0E-5
+ tol_lum = 1.0E-6  ! luminosity is stored in single precision
  nfailed(:) = 0
  iseed = -92757
+ iseed_rad = -13579
  gamma = 5./3.
 
  ! Set up a uniform box of particles
@@ -88,6 +96,18 @@ subroutine test_apr(ntests,npass)
  ! this is to prevent a (reasonable) problem when running this test with DEBUG=yes and radiation
  if (do_radiation) then
     radprop(4,:) = 23.0421 ! just some inconsequential number
+    ! non-trivial radiation energy so that the energy-conservation checks below
+    ! also test the radiation arrays across splits and merges
+    do i=1,npart
+       rad(iradxi,i) = 1.e-3*(1. + 0.5*ran2(iseed_rad))
+    enddo
+ endif
+ ! luminosity is an extensive quantity (m*du/dt): it must also be conserved
+ ! by splits and merges (this is the p dV input to the implicit radiation solver)
+ if (allocated(luminosity)) then
+    do i=1,npart
+       luminosity(i) = real(1.e-3*(1. + 0.5*ran2(iseed_rad)),kind=kind(luminosity))
+    enddo
  endif
 
  ! Set some random velocities
@@ -154,6 +174,8 @@ subroutine test_apr(ntests,npass)
  ekinin = ekin
  ethermin = etherm
  entropin = tot_entropy
+ totlumin0 = 0.
+ if (allocated(luminosity)) call calc_luminosity(npart,luminosity,totlumin0)
 
  ! Now set for a split
  write(*,"(/,a)") '--> conducting a split'
@@ -173,6 +195,10 @@ subroutine test_apr(ntests,npass)
  call checkval(ekin,ekinin,tolen,nfailed(4),'kinetic energy')
  call checkval(etherm,ethermin,tolen,nfailed(5),'thermal energy')
  call checkval(tot_entropy,entropin,tolent,nfailed(6),'total entropy')
+ if (allocated(luminosity)) then
+    call calc_luminosity(npart,luminosity,totlumin)
+    call checkval(totlumin,totlumin0,tol_lum,nfailed(14),'total luminosity (split)')
+ endif
  call update_test_scores(ntests,nfailed(1:6),npass)
 
  ! after splitting, the total number of particles should have been updated
@@ -192,6 +218,10 @@ subroutine test_apr(ntests,npass)
  call checkval(ekin,ekinin,tolen,nfailed(10),'kinetic energy')
  call checkval(etherm,ethermin,tolen,nfailed(11),'thermal energy')
  call checkval(tot_entropy,entropin,tolent,nfailed(12),'total entropy')
+ if (allocated(luminosity)) then
+    call calc_luminosity(npart,luminosity,totlumin)
+    call checkval(totlumin,totlumin0,tol_lum,nfailed(15),'total luminosity (merge)')
+ endif
 
  ! Check that the original particle number returns
  tolpart = (apr_max-1)*6 ! this corresponds to a maximum of 11 "spare" particles per level
@@ -228,6 +258,18 @@ subroutine setup_apr_region_for_test()
 
 end subroutine setup_apr_region_for_test
 
+subroutine calc_luminosity(npart,luminosity,totlumin)
+ integer, intent(in) :: npart
+ real(kind=4), intent(in) :: luminosity(:)
+ real,    intent(out) :: totlumin
+ integer :: ii
+
+ totlumin = 0.
+ do ii=1,npart
+    totlumin = totlumin + luminosity(ii)
+ enddo
+
+end subroutine calc_luminosity
 
 subroutine calc_entropy(npart,eos_vars,xyzh,apr_level,tot_entropy)
  use part, only:igasP,igas,aprmassoftype,rho

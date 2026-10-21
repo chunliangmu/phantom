@@ -17,10 +17,10 @@ module testradiation
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: apr, boundary, deriv, dim, eos, io, kernel, mpidomain,
-!   mpiutils, neighkdtree, options, part, physcon, radiation_implicit,
-!   radiation_utils, readwrite_dumps, step_lf_global, testutils, timestep,
-!   unifdis, units
+! :Dependencies: apr, boundary, deriv, dim, eos, implicit, io, kernel,
+!   mpidomain, mpiutils, neighkdtree, options, part, physcon,
+!   radiation_implicit, radiation_utils, readwrite_dumps, step_lf_global,
+!   testutils, timestep, unifdis, units
 !
  use part,      only:ithick,iradxi,ifluxx,ifluxy,ifluxz,ikappa
  use io,        only:id,master
@@ -39,7 +39,7 @@ contains
 subroutine test_radiation(ntests,npass)
  use physcon, only:solarm,au
  use units,   only:set_units
- use dim,     only:do_radiation,periodic,mpi
+ use dim,     only:do_radiation,periodic,mpi,use_apr
  use io,      only:iverbose
  use radiation_utils, only:implicit_radiation,tol_rad
  integer, intent(inout) :: ntests,npass
@@ -53,6 +53,10 @@ subroutine test_radiation(ntests,npass)
  call set_units(dist=au,mass=solarm,G=1.d0)
  call test_exchange_terms(ntests,npass,use_implicit=.false.)
  if (.not.mpi) call test_exchange_terms(ntests,npass,use_implicit=.true.)
+ if (use_apr .and. .not.mpi) then
+    call test_implicit_growth(ntests,npass)
+    call test_implicit_uneven_masses(ntests,npass)
+ endif
 
  if (.not.periodic) then
     if (id==master) write(*,"(/,a)") '--> SKIPPING TEST OF RADIATION DERIVS (need -DPERIODIC)'
@@ -73,6 +77,112 @@ subroutine test_radiation(ntests,npass)
  if (id==master) write(*,"(/,a)") '<-- RADIATION TEST COMPLETE'
 
 end subroutine test_radiation
+
+!----------------------------------------------------
+!+
+!  check that the implicit solver's working arrays
+!  grow when the particle number grows (APR)
+!+
+!----------------------------------------------------
+subroutine test_implicit_growth(ntests,npass)
+ use implicit, only:allocate_memory_implicit,ivar
+ use part,     only:hfact
+ use kernel,   only:radkern
+ integer, intent(inout) :: ntests,npass
+ integer :: nold,ierr,nerr(1)
+
+ nerr = 0
+ if (allocated(ivar)) then
+    nold = size(ivar,2)
+ else
+    call allocate_memory_implicit(16,radkern,hfact,ierr)
+    call checkval(ierr,0,0,nerr(1),'implicit memory initial allocation')
+    nold = 16
+ endif
+
+ call allocate_memory_implicit(nold+100,radkern,hfact,ierr)
+ call checkval(ierr,0,0,nerr(1),'implicit memory reallocation')
+ call checkval(min(size(ivar,2),nold+100),nold+100,0,nerr(1),'implicit memory grows with npart')
+ call update_test_scores(ntests,nerr,npass)
+
+end subroutine test_implicit_growth
+
+!----------------------------------------------------
+!+
+!  radiation energy conservation of the implicit solver
+!  with APR (uneven) particle masses
+!+
+!----------------------------------------------------
+subroutine test_implicit_uneven_masses(ntests,npass)
+ use part,            only:npart,xyzh,vxyzu,rad,radprop,drad,init_part,igas,&
+                           get_pmass,apr_level,luminosity,dvdx,fxyzu,init_rho_from_h,rho
+ use radiation_implicit, only:do_radiation_implicit
+ use radiation_utils,    only:implicit_radiation,limit_radiation_flux
+ use neighkdtree,        only:build_tree
+ use boundary,           only:xmin,xmax
+ use physcon,            only:pi
+ use apr,                only:sync_aprmassoftype
+ integer, intent(inout) :: ntests,npass
+ real    :: kappa_code,c_code,xi0,rho0,pmassi,dt
+ real    :: erad0,erad1,egas0,egas1,etot0,etot1,tol
+ integer :: i,ierr,nerr(1)
+ logical :: limit_flux_old,implicit_old
+
+ if (id==master) write(*,"(/,a)") '--> checking implicit radiation with uneven APR masses'
+
+ call init_part()
+ call setup_radiation_diffusion_problem_sinusoid(kappa_code,c_code,xi0,rho0,pmassi)
+
+ ! mixed APR levels: masses differ by up to a factor of 4
+ do i=1,npart
+    apr_level(i) = int(1 + mod(3*i,3),kind=1)
+ enddo
+ call sync_aprmassoftype()
+ call init_rho_from_h()
+
+ ! set a smooth radiation energy density on the (now non-uniform) mass distribution
+ do i=1,npart
+    rad(iradxi,i) = xi0*rho0*(1. + 0.1*sin(xyzh(1,i)*2.*pi/(xmax-xmin)))/rho(i)
+ enddo
+
+ implicit_old = implicit_radiation
+ limit_flux_old = limit_radiation_flux
+ implicit_radiation = .true.
+ limit_radiation_flux = .false.
+ dt = 1.e-24
+ luminosity(:) = 0.
+ fxyzu(4,:)   = 0.
+ dvdx(:,:)    = 0.
+
+ call build_tree(npart,npart,xyzh,vxyzu)
+
+ erad0 = 0.
+ egas0 = 0.
+ do i=1,npart
+    erad0 = erad0 + get_pmass(i,.true.)*rad(iradxi,i)
+    egas0 = egas0 + get_pmass(i,.true.)*vxyzu(4,i)
+ enddo
+ etot0 = erad0 + egas0
+
+ call do_radiation_implicit(dt,npart,rad,xyzh,vxyzu,radprop,drad,ierr)
+
+ erad1 = 0.
+ egas1 = 0.
+ do i=1,npart
+    erad1 = erad1 + get_pmass(i,.true.)*rad(iradxi,i)
+    egas1 = egas1 + get_pmass(i,.true.)*vxyzu(4,i)
+ enddo
+ etot1 = erad1 + egas1
+ implicit_radiation = implicit_old
+ limit_radiation_flux = limit_flux_old
+
+ nerr = 0
+ tol = 1.e-6
+ call checkval(ierr,0,0,nerr(1),'implicit solver with uneven masses')
+ call checkval((etot1-etot0)/abs(etot0),0.,tol,nerr(1),'total gas+radiation energy (APR masses)')
+ call update_test_scores(ntests,nerr,npass)
+
+end subroutine test_implicit_uneven_masses
 
 !----------------------------------------------------
 !+

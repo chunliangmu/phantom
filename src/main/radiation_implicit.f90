@@ -22,7 +22,7 @@ module radiation_implicit
 !   neighcompact, part, physcon, quartic, radiation_utils, timing, units
 !
  use, intrinsic :: ieee_arithmetic, only:ieee_is_nan
- use part,            only:ikappa,ilambda,iedd,idkappa,iradxi,icv,ifluxx,ifluxy,ifluxz,igas,rho,get_pmass,imu
+ use part,            only:ikappa,ilambda,iedd,idkappa,iradxi,iradP,icv,ifluxx,ifluxy,ifluxz,igas,rho,get_pmass,imu,radprop
  use eos,             only:iopacity_type,get_cv,eos_outputs_mu
  use radiation_utils, only:get_kappa,tol_rad,itsmax_rad,cv_type
  use neighcompact,    only:get_compacted_neighbour_list
@@ -39,8 +39,8 @@ module radiation_implicit
  logical, parameter :: use_photoelectric_heating = .false.
  real, parameter    :: Tdust_threshold = 100.
 
- real, public :: rad_errorE,rad_errorU
- integer, public :: its_global
+ real, public :: rad_errorE = 0.,rad_errorU = 0.
+ integer, public :: its_global = 0
 
  character(len=*), parameter :: label = 'radiation_implicit'
 
@@ -152,8 +152,8 @@ subroutine do_radiation_onestep(dt,npart,rad,xyzh,vxyzu,radprop,origEU,EU0,faile
  use kernel,  only:radkern
  use timing,  only:get_timings
  use derivutils, only:do_timing
- use implicit,   only:allocate_memory_implicit,icompactmax,ivar,ijvar,ncompact,ncompactlocal,&
-                      varij,varij2,varinew,vari,mask
+ use implicit,   only:allocate_memory_implicit,grow_memory_implicit,icompactmax,ivar,ijvar,&
+                      ncompact,ncompactlocal,varij,varij2,varinew,vari,mask
  use radiation_utils, only:implicit_radiation_store_drad
  real,    intent(in)    :: dt,xyzh(:,:),origEU(:,:)
  integer, intent(in)    :: npart
@@ -162,6 +162,7 @@ subroutine do_radiation_onestep(dt,npart,rad,xyzh,vxyzu,radprop,origEU,EU0,faile
  integer, intent(out)   :: nit,ierr
  real,    intent(out)   :: maxerrE2,maxerrU2,EU0(6,npart)
  integer              :: its
+ integer              :: nedges
  real                 :: maxerrE2last,maxerrU2last,maxerrE2last2,maxerrU2last2,omega,maxerrE2prev2,maxerrU2prev2
  real(kind=4)         :: tlast,tcpulast,t1,tcpu1
  character(len=100)   :: warningstr
@@ -181,13 +182,24 @@ subroutine do_radiation_onestep(dt,npart,rad,xyzh,vxyzu,radprop,origEU,EU0,faile
  call allocate_memory_implicit(npart,radkern,hfact,ierr)
 
  !dtimax = dt/imaxstep
- call get_compacted_neighbour_list(xyzh,ivar,ijvar,ncompact,ncompactlocal)
+ call get_compacted_neighbour_list(xyzh,ivar,ijvar,ncompact,ncompactlocal,nedges)
 
  ! check for errors
  if (ncompact <= 0 .or. ncompactlocal <= 0) then
     call error('radiation_implicit','empty neighbour list - need to call build_tree first?')
     ierr = ierr_neighbourlist_empty
     return
+ endif
+
+ ! APR can produce neighbour counts larger than the uniform-density estimate;
+ ! grow the edge-indexed arrays and rebuild the list if necessary
+ if (nedges > icompactmax) then
+    call grow_memory_implicit(nedges,ierr)
+    if (ierr /= 0) return
+    call get_compacted_neighbour_list(xyzh,ivar,ijvar,ncompact,ncompactlocal,nedges)
+    if (nedges > icompactmax) then
+       call fatal('radiation_implicit','failed to grow compacted neighbour list',var='nedges',ival=nedges)
+    endif
  endif
 
  call do_timing('radneighlist',tlast,tcpulast,start=.true.)
@@ -368,6 +380,11 @@ subroutine fill_arrays(ncompact,ncompactlocal,npart,icompactmax,dt,xyzh,vxyzu,iv
              EU0(2,j) = vxyzu(4,j)
              EU0(3,j) = get_cv(cv_type,rhoj,vxyzu(4,j))
              EU0(4,j) = get_kappa(iopacity_type,vxyzu(4,j),EU0(3,j),rhoj)
+             ! lambda and the Eddington factor are recomputed for active particles in
+             ! compute_flux, but inactive neighbours never reach that loop; use their
+             ! stored values from the last solve rather than leaving EU0 uninitialised
+             EU0(5,j) = radprop(ilambda,j)
+             EU0(6,j) = radprop(iedd,j)
           endif
 
           hj21 = 1./(hj*hj)
@@ -1184,13 +1201,14 @@ end subroutine turn_heating_cooling_off
 !+
 !---------------------------------------------------------
 subroutine store_radiation_results(ncompactlocal,npart,ivar,EU0,rad,radprop,vxyzu)
+ use part, only:rho
  integer, intent(in)  :: ncompactlocal,npart,ivar(:,:)
  real,    intent(in)  :: EU0(6,npart)
  real,    intent(out) :: rad(:,:),radprop(:,:),vxyzu(:,:)
  integer :: i,n
 
  !$omp parallel do default(none) &
- !$omp shared(ncompactlocal,ivar,vxyzu,EU0,rad,radprop) &
+ !$omp shared(ncompactlocal,ivar,vxyzu,EU0,rad,radprop,rho) &
  !$omp private(n,i)
  do n = 1,ncompactlocal
     i = ivar(3,n)
@@ -1200,6 +1218,9 @@ subroutine store_radiation_results(ncompactlocal,npart,ivar,EU0,rad,radprop,vxyz
     radprop(ikappa,i) = EU0(4,i)
     radprop(ilambda,i) = EU0(5,i)
     radprop(iedd,i) = EU0(6,i)
+    ! keep the radiation pressure consistent with the radiation energy that
+    ! the force evaluation is about to use (cons2prim runs before this solve)
+    radprop(iradP,i) = (1./3.)*EU0(1,i)*rho(i)
  enddo
 !$omp end parallel do
 

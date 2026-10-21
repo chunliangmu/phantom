@@ -38,9 +38,15 @@ subroutine compact_neigh_counts(npart,radkern,hfact,nneigh_average,icompactmax)
  integer, intent(in)  :: npart
  real,    intent(in)  :: radkern,hfact
  integer, intent(out) :: nneigh_average,icompactmax
+ real(kind=8) :: nedges
 
  nneigh_average = int(4./3.*pi*(radkern*hfact)**3) + 1
- icompactmax = int(1.2*10.*nneigh_average*npart)
+ nedges = 1.2d0*10.d0*real(nneigh_average,kind=8)*real(npart,kind=8)
+ if (nedges > real(huge(icompactmax),kind=8)) then
+    call fatal('neighcompact','neighbour-list size exceeds default integer range: use fewer particles or MPI',&
+               var='npart',ival=npart)
+ endif
+ icompactmax = int(nedges)
 
 end subroutine compact_neigh_counts
 

@@ -15,10 +15,10 @@ module apr
 ! :Runtime parameters: None
 !
 ! :Dependencies: apr_region, dim, get_apr_level, io, io_summary, kdtree,
-!   mpiforce, neighkdtree, part, physcon, quitdump, relaxem, utils_apr,
-!   vectorutils
+!   mpiforce, neighkdtree, part, physcon, quitdump, relaxem, sortutils,
+!   utils_apr, vectorutils
 !
- use dim, only:gr,use_apr
+ use dim, only:gr,use_apr,do_radiation
  use apr_region
  use utils_apr
 
@@ -92,6 +92,14 @@ subroutine init_apr(apr_level,ierr)
     ! largest particle (don't do it twice accidentally!)
     if (ref_dir == -1) then
        if (.not. apr_start_coarse) then
+          ! rescaling massoftype here would leave rho (and hence E = rho*xi,
+          ! and the radiation pressure) inconsistent with the new masses unless
+          ! the radiation field is rescaled as well; refuse rather than silently
+          ! producing a wrong radiation field
+          if (do_radiation) then
+             call fatal('init_apr','ref_dir=-1 with mass rescaling is incompatible with RADIATION=yes: '//&
+                        'use ref_dir=1, or start from a level-tagged dump (e.g. one relaxed with apr_start_coarse)')
+          endif
           massoftype(:) = massoftype(:) * 2.**(apr_max -1)
        endif
        top_level = 1
@@ -351,19 +359,19 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
 
        ! now go through and actually split them - this should *probably* not be parallelised
        ! due to the content of the nested functions, idx_len probably isn't that long either
-        do ii = 1,idx_len
-           mm = idx_split(ii) ! original particle that should be split
-           kk = npartold + ii ! location in array for new particle
-           if (adjusted_split) then
-              call splitpart(mm,kk,rneigh=rneighs(ii))
-           else
-              call splitpart(mm,kk)
-           endif
-           if (relax_in_loop) then
-              relaxlist(nrelax + ii) = mm
-              relaxlist(nrelax + n_to_split + ii) = kk
-           endif
-        enddo
+       do ii = 1,idx_len
+          mm = idx_split(ii) ! original particle that should be split
+          kk = npartold + ii ! location in array for new particle
+          if (adjusted_split) then
+             call splitpart(mm,kk,rneigh=rneighs(ii))
+          else
+             call splitpart(mm,kk)
+          endif
+          if (relax_in_loop) then
+             relaxlist(nrelax + ii) = mm
+             relaxlist(nrelax + n_to_split + ii) = kk
+          endif
+       enddo
 
        ! if relaxing, update the total number that will be relaxed
        if (relax_in_loop) nrelax = nrelax + 2*n_to_split
@@ -459,7 +467,6 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  npart = npartnew
  npart_regions(1) = npartnew - sum(npart_regions(2:apr_max))
  if (apr_verbose) print*,'particles at each level:',npart_regions(:)
-
 
  ! If we need to relax, do it here
  if (nrelax > 0 .and. do_relax) call relax_particles(npart,n_ref,xyzh_ref,force_ref,rho_ref,nrelax,relaxlist)
@@ -692,7 +699,6 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           vec(1:3) = 0.
           r_sep = 0.
        endif
-
 
        ! do not merge if the resulting pair would straddle the apr boundary,
        ! as the outside member would simply be re-split on the next step (merge -> re-split churn);
