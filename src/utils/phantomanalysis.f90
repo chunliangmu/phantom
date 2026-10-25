@@ -15,10 +15,12 @@ program phantomanalysis
 ! :Usage: phantomanalysis dumpfile(s)
 !
 ! :Dependencies: analysis, apr, dim, eos, eos_stamatellos, externalforces,
-!   fileutils, infile_utils, io, kernel, part, readwrite_dumps
+!   fileutils, infile_utils, io, kernel, part, readwrite_dumps,
+!   systemutils, utils_apr
 !
- use dim,             only:tagline,do_nucleation,inucleation,use_apr
+ use dim,             only:tagline,do_nucleation,inucleation,use_apr,maxp_alloc
  use part,            only:xyzh,hfact,massoftype,vxyzu,npart,apr_level !,npartoftype
+ use systemutils,     only:get_command_option
  use io,              only:set_io_unit_numbers,iprint,idisk1,ievfile,ianalysis
  use readwrite_dumps, only:read_dump,read_smalldump,is_small_dump
  use infile_utils,    only:open_db_from_file,inopts,read_inopt,close_db
@@ -29,8 +31,9 @@ program phantomanalysis
  use kernel,          only:hfact_default
  use externalforces,  only:mass1,accradius1
  use apr,             only:init_apr
+ use utils_apr,       only:read_options_apr
  implicit none
- integer            :: nargs,iloc,ierr,iarg,i,idust_opacity
+ integer            :: nargs,iloc,ierr,iarg,i,ifile,idust_opacity,nerr
  real               :: time
  logical            :: iexist
  character(len=120) :: dumpfile,fileprefix,infile
@@ -50,18 +53,23 @@ program phantomanalysis
     stop
  endif
 
- ! initialise apr if it is being used
- if (use_apr) call init_apr(apr_level,ierr)
+ ! allow --maxp on the command line, as for phantom/phantommoddump
+ maxp_alloc = get_command_option('maxp',default=int(maxp_alloc))
 
  print "(/,a,/)",' Phantom analysis ('//trim(analysistype)//'): You data, we analyse'
 
+ ifile = 0
  over_args: do iarg=1,nargs
 
     call get_command_argument(iarg,dumpfile)
+    if (len_trim(dumpfile) > 0) then
+       if (dumpfile(1:1) == '-') cycle over_args
+    endif
+    ifile = ifile + 1
 !
 !--If the first dumpfile, then read the .in file (if it exists) to obtain the equation of state
 !
-    if (iarg==1) then
+    if (ifile==1) then
 
        !iloc = index(dumpfile,'_0')
        iloc = index(dumpfile,'_',.true.) !to load dump > 9999
@@ -81,6 +89,11 @@ program phantomanalysis
              do_nucleation = .true.
              inucleation = 1
           endif
+          if (use_apr) then
+             nerr = 0
+             call read_options_apr(db,nerr)
+             if (nerr > 0) ierr = nerr
+          endif
           call read_inopt(mass1,'mass1',db,ierr)
           call read_inopt(accradius1,'accradius1',db,ierr)
           call close_db(db)
@@ -88,7 +101,7 @@ program phantomanalysis
        endif
     endif
 
-    if (iarg==1 .and. ieos == 24) call init_coolra()
+    if (ifile==1 .and. ieos == 24) call init_coolra()
 !
 !--read particle setup from dumpfile
 !
@@ -120,6 +133,13 @@ program phantomanalysis
        endif
     elseif (ierr /= 0) then
        stop 'error reading dumpfile'
+    endif
+
+    ! initialise APR after reading the dump:
+    ! aprmassoftype depends on the level-dependent masses stored in the dump header
+    if (use_apr .and. index(analysistype,'header')==0) then
+       call init_apr(apr_level,ierr)
+       if (ierr /= 0) stop 'error initialising APR'
     endif
 
     if (hfact < tiny(hfact)) then

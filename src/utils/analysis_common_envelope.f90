@@ -195,7 +195,7 @@ end subroutine do_analysis
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 subroutine total_dust_mass(time,npart,particlemass,xyzh)
- use part,           only:nucleation,idK3,idK0,idK1,idJstar
+ use part,           only:nucleation,idK3,idK0,idK1,idJstar,get_pmass
  use dust_formation, only:set_abundances,mass_per_H
  use physcon, only:atomic_mass_unit
  real,    intent(in) :: time,particlemass,xyzh(:,:)
@@ -207,7 +207,9 @@ subroutine total_dust_mass(time,npart,particlemass,xyzh)
  real                           :: median,mass_factor,grain_size
  real, parameter :: a0 = 1.28e-4 !radius of a carbon atom in micron
 
- call set_abundances !initialize mass_per_H
+ ! mass_per_H and the abundances are restored from the dump header when nucleation is active;
+ ! only fall back to the default network if unavailable
+ if (mass_per_H <= 0.) call set_abundances
  dust_mass = 0.
  ncols = 2
  print *,'size(nucleation,1) = ',size(nucleation,1)
@@ -216,9 +218,9 @@ subroutine total_dust_mass(time,npart,particlemass,xyzh)
  columns = (/'Dust mass [Msun]', &
              'median size [um]'/)
  j=0
- mass_factor = 12.*atomic_mass_unit*particlemass/mass_per_H
  do i = 1,npart
     if (.not. isdead_or_accreted(xyzh(4,i))) then
+       mass_factor = 12.*atomic_mass_unit*get_pmass(i,.true.)/mass_per_H
        dust_mass(1) = dust_mass(1) + nucleation(idK3,i) *mass_factor
        grain_size = a0*nucleation(idK1,i)/(nucleation(idK0,i)+1.0E-99) !in micron
        if (grain_size > a0) then

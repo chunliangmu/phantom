@@ -578,7 +578,7 @@ subroutine check_arrays(i1,i2,noffset,npartoftype,npartread,nptmass,nsinkpropert
  use part, only:maxphase,isetphase,set_particle_type,igas,ihacc,ihsoft,imacc,ilum,ikappa,&
                 xyzmh_ptmass_label,vxyz_ptmass_label,get_pmass,rhoh,dustfrac,ndusttypes,norig,&
                 itemp,iX,iZ,imu,apr_level
- use io,   only:warning,id,master
+ use io,   only:warning,fatal,id,master
  use options,        only:alpha,use_dustfrac,use_var_comp
  use sphNGutils,     only:itype_from_sphNG_iphase,isphNG_accreted
  use dust_formation, only:init_nucleation
@@ -818,7 +818,10 @@ subroutine check_arrays(i1,i2,noffset,npartoftype,npartread,nptmass,nsinkpropert
  ! Dust nucleation arrays
  !
  if (do_nucleation) then
-    if (.not.all(got_nucleation)) then
+    if (any(got_nucleation) .and. .not.all(got_nucleation)) then
+       ! should not silently reset the existing partial dust array, just in case
+       call fatal('check_arrays','dump contains only some but not all dust nucleation arrays')
+    elseif (.not.any(got_nucleation)) then
        write(*,"(/,1x,a,/)") 'WARNING: DUST_NUCLEATION=yes but nucleation arrays not found in Phantom dump file'
        call init_nucleation()
     endif

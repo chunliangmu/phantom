@@ -15,8 +15,8 @@ module apr
 ! :Runtime parameters: None
 !
 ! :Dependencies: apr_region, dim, get_apr_level, io, io_summary, kdtree,
-!   mpiforce, neighkdtree, part, physcon, quitdump, relaxem, utils_apr,
-!   vectorutils
+!   mpiforce, neighkdtree, part, physcon, quitdump, relaxem, sortutils,
+!   utils_apr, vectorutils
 !
  use dim, only:gr,use_apr
  use apr_region
@@ -460,7 +460,6 @@ subroutine update_apr(npart,xyzh,vxyzu,fxyzu,apr_level)
  npart_regions(1) = npartnew - sum(npart_regions(2:apr_max))
  if (apr_verbose) print*,'particles at each level:',npart_regions(:)
 
-
  ! If we need to relax, do it here
  if (nrelax > 0 .and. do_relax) call relax_particles(npart,n_ref,xyzh_ref,force_ref,rho_ref,nrelax,relaxlist)
  ! Turn it off now because we only want to do this on first splits
@@ -692,7 +691,6 @@ subroutine merge_with_special_tree(nmerge,mergelist,xyzh_merge,vxyzu_merge,curre
           vec(1:3) = 0.
           r_sep = 0.
        endif
-
 
        ! do not merge if the resulting pair would straddle the apr boundary,
        ! as the outside member would simply be re-split on the next step (merge -> re-split churn);
