@@ -201,6 +201,7 @@ subroutine test_apr(ntests,npass)
 
  ! test the dust moments for dust nucleations
  call test_apr_dust(ntests,npass)
+ call test_apr_injection(ntests,npass)
 
  if (id==master) write(*,"(/,a)") '<-- APR TEST COMPLETE'
 
@@ -340,6 +341,31 @@ subroutine test_apr_dust(ntests,npass)
  store_dust_temperature = .false.
 
 end subroutine test_apr_dust
+
+!--------------------------------------------
+!+
+!  Injected particles must take the level-1 APR mass before rho is set
+!+
+!--------------------------------------------
+subroutine test_apr_injection(ntests,npass)
+ use part,      only:npart,npartoftype,apr_level,xyzh,vxyzu,rho,massoftype,rhoh,igas
+ use partinject, only:add_or_update_particle
+ use dim,       only:use_apr
+ integer, intent(inout) :: ntests,npass
+ integer :: ipart,nfailed(2)
+ real, parameter :: htest = 0.05
+
+ if (.not.use_apr) return
+
+ if (id==master) write(*,"(/,a)") '--> checking APR mass of newly injected particles'
+ ipart = npart + 1
+ apr_level(ipart) = 2 ! deliberately stale value before injection
+ call add_or_update_particle(igas,(/0.1,0.2,0.3/),(/0.,0.,0./),htest,1.0,ipart,npart,npartoftype,xyzh,vxyzu)
+ call checkval(int(apr_level(ipart)),1,0,nfailed(1),'new injected particle starts at APR level 1')
+ call checkval(rho(ipart),rhoh(htest,massoftype(igas)),1.e-14,nfailed(2),'injected particle rho uses level-1 mass')
+ call update_test_scores(ntests,nfailed,npass)
+
+end subroutine test_apr_injection
 
 !--------------------------------------------
 !+

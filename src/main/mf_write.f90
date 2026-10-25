@@ -40,16 +40,15 @@ module mf_write
 
 contains
 subroutine mflow_write(time,dt)
- use part,             only:npart,xyzh,massoftype
+ use part,             only:npart,xyzh,get_pmass
 !  use analysis,         only:read_discparams
  use io,               only:fatal
  real, intent(in) :: time,dt
- real                            :: mass(nradi),ri,rad(nradi),dr,pmass,totalmassrad,totalmass
+ real                            :: mass(nradi),ri,rad(nradi),dr,pmassi,totalmassrad,totalmass
 
  integer                         :: i,k
  character(len=120)             :: num, formatout
 
- pmass=massoftype(1)
  mass(:)=0
  rad(:)=0
  totalmass=0
@@ -60,19 +59,20 @@ subroutine mflow_write(time,dt)
  enddo
 
  do i = 1,npart
+    pmassi = get_pmass(i,.false.)
 
     if (xyzh(4,i) < -tiny(xyzh)) then !ACCRETED
        !!!Mass of accreted put in radius 0
-       mass(1)=mass(1)+pmass
+       mass(1)=mass(1)+pmassi
 
     elseif (xyzh(4,i)  >  tiny(xyzh)) then ! IF ACTIVE
        ri=sqrt(dot_product(xyzh(1:2,i),xyzh(1:2,i)))
        do k=2,nradi
-          if (ri<rad(k)) mass(k)=mass(k)+pmass
+          if (ri<rad(k)) mass(k)=mass(k)+pmassi
        enddo
     endif
 
-    totalmass=totalmass+pmass
+    totalmass=totalmass+pmassi
  enddo
 
  totalmassrad=mass(nradi)
@@ -146,24 +146,22 @@ subroutine mflow_init(iflow,evfile,infile)
 end subroutine mflow_init
 
 subroutine vmflow_write(time,dt)
- use part,             only:npart,xyzh,vxyzu,massoftype
+ use part,             only:npart,xyzh,vxyzu
  !  use analysis,         only:flow_analysis !contained in analysis_disc_MFlow
  use io,               only:fatal
  use physcon,          only:pi
 
  real, intent(in) :: time,dt
- real                            :: flow(nradi),rad(nradi),dr,pmass,totalmass,rmax,rmin
+ real                            :: flow(nradi),rad(nradi),dr,rmax,rmin
  character(len=120)             :: num, formatout
 
- pmass=massoftype(1)
  rmax=maxradius
  rmin=0.0
  flow(:)=0
  rad(:)=0
- totalmass=0
 
  call createbins(rad,nradi,rmax,rmin,dr)
- call flow_analysis(xyzh,vxyzu,pmass,flow,npart,rad,nradi,dr)
+ call flow_analysis(xyzh,vxyzu,flow,npart,rad,nradi,dr)
 
  write(num,*) nradi+2
  formatout="("//trim(num)//"(es18.10,1x))"
@@ -359,12 +357,13 @@ subroutine createbins(rad,nr,rmax,rmin,dr)
 
 end subroutine createbins
 
-subroutine flow_analysis(xyzh,vxyz,pmass,flow,npart,rad,nr,dr)
+subroutine flow_analysis(xyzh,vxyz,flow,npart,rad,nr,dr)
+ use part, only:get_pmass
 
  real,    intent(inout) :: flow(:)
- real,    intent(in)    :: xyzh(:,:),vxyz(:,:),rad(:),dr,pmass
+ real,    intent(in)    :: xyzh(:,:),vxyz(:,:),rad(:),dr
  integer, intent(in)    :: npart,nr
- real                :: rcili,vri
+ real                :: rcili,vri,pmassi
  integer             :: i,ii
 
  flow(:)=0
@@ -380,7 +379,8 @@ subroutine flow_analysis(xyzh,vxyz,pmass,flow,npart,rad,nr,dr)
        !compute mass flow trough rad(ii)
        rcili=sqrt(dot_product(xyzh(1:2,i),xyzh(1:2,i)))
        vri=vxyz(1,i)*xyzh(1,i)/rcili+vxyz(2,i)*xyzh(2,i)/rcili
-       flow(ii)=flow(ii)-vri*pmass/dr !normalized on dr
+       pmassi=get_pmass(i,.false.)
+       flow(ii)=flow(ii)-vri*pmassi/dr !normalized on dr
     endif
 
  enddo

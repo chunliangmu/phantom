@@ -194,7 +194,7 @@ end subroutine calculate_Teq
 subroutine density_along_line(npart, xyzh, r0, npart_axis, idx_axis, rmin, rmax, r_star, N, particlemass, &
      rho_cgs, rho_over_r2, T, Teq, K3, K3i)
  use kernel, only:cnormk,wkern
- use part,   only:rho
+ use part,   only:rho,get_pmass
  use units,  only:unit_density
  integer, intent(in)  :: npart,N
  real,    intent(in)  :: xyzh(:,:), T(:), r0(3), particlemass
@@ -204,7 +204,7 @@ subroutine density_along_line(npart, xyzh, r0, npart_axis, idx_axis, rmin, rmax,
  real,    intent(in),  optional :: K3(:)
  real,    intent(out), optional :: K3i(N)
  real :: rhoi(2*N+1), OR(2*N+1), Ti(2*N+1), Ki(2*N+1), xnorm(2*N+1)
- real :: OH, d2_axis, HR, q2, q, fact0, fact, h, h2, part_mass
+ real :: OH, d2_axis, HR, q2, q, fact, h, h2, part_mass
  real :: delta_r, rmin_o, rmin_p, rmax_p, dr, r(3), xfact, rhoinv
  integer :: i, np, j, j_min, j_max, Nr
 
@@ -230,8 +230,6 @@ subroutine density_along_line(npart, xyzh, r0, npart_axis, idx_axis, rmin, rmax,
  Ki(:) = 0.
  Ti(:)  = 0.
  xnorm(:) = 0.
- part_mass = particlemass
- fact0 =  part_mass*cnormk
  open(unit=221,file='part_axis.dat')
  write(221,*) '# ng x y z rho T K'
  do i = 1, npart_axis
@@ -253,9 +251,10 @@ subroutine density_along_line(npart, xyzh, r0, npart_axis, idx_axis, rmin, rmax,
     j_min = max(1, j_min)
     j_max = min(Nr, j_max)
     ! Adds the contribution of particle np to density at all the discretized locations in the interaction sphere
-    fact = fact0/h**3
-    rhoinv = 1./rho(i)
-    write (221,*) np,r,rho(i),T(np),K3(np)
+    part_mass = get_pmass(np,.true.)
+    fact = part_mass*cnormk/h**3
+    rhoinv = 1./rho(np)
+    write (221,*) np,r,rho(np),T(np),K3(np)
     do j=j_min, j_max
        HR = OR(j) - OH
        q2 = (d2_axis+HR**2)/h2

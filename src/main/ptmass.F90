@@ -1240,7 +1240,11 @@ subroutine ptmass_create(nptmass,npart,itest,xyzh,pxyzu,fxyzu,fext,divcurlv,pote
  else
     itype = igas
  endif
- pmassi = massoftype(itype)
+ if (use_apr) then
+    pmassi = aprmassoftype(itype,apr_level(itest))
+ else
+    pmassi = massoftype(itype)
+ endif
  pmassj = massoftype(igas)
  pmassk = pmassj
  itypej = igas
@@ -1319,12 +1323,12 @@ subroutine ptmass_create(nptmass,npart,itest,xyzh,pxyzu,fxyzu,fext,divcurlv,pote
     ! get mass and particle type to immediately determine if active and accretable
     if (maxphase==maxp) then
        call get_partinfo(iphase(j),iactivej,isgasj,isdustj,itypej)
-       if (use_apr) then
-          pmassj = aprmassoftype(itypej,apr_level(j))
-       else
-          pmassj = massoftype(itypej)
-       endif
        if (.not. is_accretable(itypej) ) cycle over_neigh ! Verify particle is 'accretable'
+    endif
+    if (use_apr) then
+       pmassj = aprmassoftype(itypej,apr_level(j))
+    else
+       pmassj = massoftype(itypej)
     endif
 
     if (n <= maxcache) then
@@ -1425,12 +1429,12 @@ subroutine ptmass_create(nptmass,npart,itest,xyzh,pxyzu,fxyzu,fext,divcurlv,pote
                 if ((k==itest .and. id==id_rhomax) .or. k > maxpsph) cycle over_neigh_k ! contribution already added
                 if (maxphase==maxp) then
                    itypek = iamtype(iphase(k))
-                   if (use_apr) then
-                      pmassk = aprmassoftype(itypek,apr_level(k))
-                   else
-                      pmassk = massoftype(itypek)
-                   endif
                    if (.not. is_accretable(itypek) ) cycle over_neigh_k
+                endif
+                if (use_apr) then
+                   pmassk = aprmassoftype(itypek,apr_level(k))
+                else
+                   pmassk = massoftype(itypek)
                 endif
 
                 if (nk <= maxcache) then

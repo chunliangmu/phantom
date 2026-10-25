@@ -2090,7 +2090,7 @@ subroutine delete_particles_with_large_h(center,npart,h_on_r_min,rho_max,rmax)
 
  do i=1,npart
     r = sqrt(dot_product(xyzh(1:3,i)-center,xyzh(1:3,i)-center))
-    pmass = massoftype(iamtype(iphase(i)))
+    pmass = get_pmass(i,.false.)
     rho_part = rhoh(xyzh(4,i),pmass)
     h_on_r = xyzh(4,i)/r
     if (r > rmax .and. rho_part < rho_max .and. h_on_r > h_on_r_min) then

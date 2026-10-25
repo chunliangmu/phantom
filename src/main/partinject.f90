@@ -84,6 +84,10 @@ subroutine add_or_update_particle(itype,position,velocity,h,u,particle_number,np
     npartoftype(itype) = npartoftype(itype)+1
  endif
 
+ ! newly injected particles have the base (largest) APR mass; set the level
+ ! before computing rho from the level-dependent mass
+ if (use_apr .and. new_particle) apr_level(particle_number) = 1
+
  call set_particle_type(particle_number,itype)
 
  ! Update particle type, position, size, velocity and energy
@@ -129,8 +133,6 @@ subroutine add_or_update_particle(itype,position,velocity,h,u,particle_number,np
     eos_vars(igamma,particle_number) = gamma
  endif
  if (h2chemistry) abundance(:,particle_number) = abund_default
-
- if (use_apr) apr_level(particle_number) = 1 ! since it has the largest mass
 
 end subroutine add_or_update_particle
 

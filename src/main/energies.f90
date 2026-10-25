@@ -806,11 +806,8 @@ subroutine compute_energies(t)
  if (track_lum) totlum = ev_data(iev_sum,iev_totlum)
 
  if (calc_gravitwaves) then
-    if (use_apr) then
-       pmassi = aprmassoftype(igas,apr_level(i))
-    else
-       pmassi = massoftype(igas)
-    endif
+    ! calculate_strain uses get_pmass internally, so APR masses are handled
+    pmassi = massoftype(igas)
     x0 = 0.; v0 = 0.; a0 = 0.  ! use the origin by default
     if (gr) then
        !call get_geodesic_accel(axyz,npart,vxyzu(1:3,:),metrics,metricderivs)

@@ -124,7 +124,7 @@ end subroutine init_porosity
 subroutine init_filfac(npart,xyzh,vxyzu,rho)
  use options,           only:use_dustfrac
  use growth,            only:alpha_dg
- use part,              only:idust,igas,iamtype,iphase,massoftype,&
+ use part,              only:idust,igas,iamtype,iphase,get_pmass,&
                              rhoh,dustfrac,dustprop,filfac,Omega_k
  use dust,              only:get_viscmol_nu!,grainsizecgs
  use eos,               only:gamma,get_spsound
@@ -156,7 +156,7 @@ subroutine init_filfac(npart,xyzh,vxyzu,rho)
                    cs = get_spsound(3,xyzh(:,i),rhogas,vxyzu(:,i))
                 else
                    ! bootstrap gas density from h (dustgasprop not yet available for two-fluid dust)
-                   rhogas = rhoh(xyzh(4,i),massoftype(igas))
+                   rhogas = rhoh(xyzh(4,i),get_pmass(i,.true.))
                    cs = get_spsound(3,xyzh(:,i),rhogas,vxyzu(:,i))
                    rhoi = rhogas + rho(i)
                 endif

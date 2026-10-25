@@ -23,11 +23,11 @@ subroutine get_tmunugrid_all(npart,xyzh,vxyzu,rho,tmunus)
  use einsteintk_utils, only:dxgrid, gridorigin,gridsize,tmunugrid,rhostargrid
  use interpolations3D, only:interpolate3D,interpolate3D_vecexact
  use boundary,         only: xmin,ymin,zmin,xmax,ymax,zmax
- use part, only:massoftype,igas
+ use part, only:get_pmass,igas
  integer, intent(in)    :: npart
  real,    intent(in)    :: vxyzu(:,:), tmunus(:,:,:),rho(:)
  real,    intent(inout) :: xyzh(:,:)
- real                      :: weight,h,rhoi,pmass
+ real                      :: weight,pmass
  real                      :: weights(npart)
  real                      :: xmininterp(3)
  integer                   :: ngrid(3)
@@ -38,7 +38,10 @@ subroutine get_tmunugrid_all(npart,xyzh,vxyzu,rho,tmunus)
  integer                   :: itype(npart),ilendat
 
  ! total mass of the particles
- totalmass = npart*massoftype(igas)
+ totalmass = 0.
+ do i=1,npart
+    totalmass = totalmass + get_pmass(i,.false.)
+ enddo
 
  !print*, "totalmass(part): ", totalmass
 
@@ -46,17 +49,14 @@ subroutine get_tmunugrid_all(npart,xyzh,vxyzu,rho,tmunus)
  rhostargrid = 0.
  if (.not. allocated(datsmooth)) allocate (datsmooth(16,gridsize(1),gridsize(2),gridsize(3)))
  if (.not. allocated(dat)) allocate (dat(npart,16))
- ! All particles have equal weighting in the interp
- ! Here we calculate the weight for the first particle
- ! Get the smoothing length
- h = xyzh(4,1)
- ! Get pmass
- pmass = massoftype(igas)
- ! Get density from kernel sum
- rhoi = rho(1)
- call get_weight(pmass,h,rhoi,weight)
+ ! APR particles have different masses, so each interpolation weight is
+ ! computed from its own mass
+ do i=1,npart
+    pmass = get_pmass(i,.false.)
+    call get_weight(pmass,xyzh(4,i),rho(i),weight)
+    weights(i) = weight
+ enddo
 
- weights = weight
  itype = 1
 
  ! For now we can set this to the origin, but it might need to be
@@ -152,9 +152,9 @@ subroutine interpolate_to_grid(gridarray,dat,rho)
  use einsteintk_utils, only:dxgrid, gridorigin
  use interpolations3D, only:interpolate3D
  use boundary,         only: xmin,ymin,zmin,xmax,ymax,zmax
- use part, only:npart,xyzh,massoftype,igas
+ use part, only:npart,xyzh,get_pmass,igas
  real, intent(out) :: gridarray(:,:,:) ! Grid array to interpolate a quantity to
- real                      :: weight,h,rhoi,pmass
+ real                      :: weight,pmass
  real                      :: xmininterp(3)
  integer                   :: ngrid(3)
  integer                   :: nnodes,i, ilower, iupper, jlower, jupper, klower, kupper
@@ -192,12 +192,9 @@ subroutine interpolate_to_grid(gridarray,dat,rho)
  periodicz = .true.
 
  do i=1, npart
-    h = xyzh(4,i)
-    ! Get pmass
-    pmass = massoftype(igas)
-    ! Get density from kernel sum
-    rhoi = rho(i)
-    call get_weight(pmass,h,rhoi,weight)
+    ! Get the level-dependent particle mass
+    pmass = get_pmass(i,.false.)
+    call get_weight(pmass,xyzh(4,i),rho(i),weight)
     weights(i) = weight
  enddo
  itype   = igas
@@ -213,7 +210,7 @@ subroutine interpolate_to_grid(gridarray,dat,rho)
 end subroutine interpolate_to_grid
 
 subroutine check_conserved_dens(rhostargrid,cfac)
- use part, only:npart,massoftype,igas
+ use part, only:npart,get_pmass
  use einsteintk_utils, only:dxgrid, gridorigin
  use boundary,         only:xmin,xmax,ymin,ymax,zmin,zmax
  real, intent(in)  :: rhostargrid(:,:,:)
@@ -235,7 +232,10 @@ subroutine check_conserved_dens(rhostargrid,cfac)
  enddo
 
  ! total mass of the particles
- totalmasspart = npart*massoftype(igas)
+ totalmasspart = 0.
+ do i=1,npart
+    totalmasspart = totalmasspart + get_pmass(i,.false.)
+ enddo
 
  !print*, "Total mass grid: ", totalmassgrid
  !print*, "Total mass part: ", totalmasspart
@@ -247,7 +247,7 @@ subroutine check_conserved_dens(rhostargrid,cfac)
 end subroutine check_conserved_dens
 
 subroutine check_conserved_p(pgrid,cfac)
- use part, only:npart,massoftype,igas
+ use part, only:npart,get_pmass
  use einsteintk_utils, only:dxgrid, gridorigin
  use boundary,         only:xmin,xmax,ymin,ymax,zmin,zmax
  real, intent(in)  :: pgrid(:,:,:)
@@ -270,8 +270,11 @@ subroutine check_conserved_p(pgrid,cfac)
     enddo
  enddo
 
- ! total cons(momentum) of the particles
- totalmomentumpart = npart*massoftype(igas)
+ ! total mass of the particles (the grid momentum sum is currently unused)
+ totalmomentumpart = 0.
+ do i=1,npart
+    totalmomentumpart = totalmomentumpart + get_pmass(i,.false.)
+ enddo
 
  ! Calculate cfac
  cfac = totalmomentumpart/totalmomentumgrid

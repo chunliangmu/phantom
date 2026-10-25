@@ -46,13 +46,14 @@ subroutine calculate_strain(hx,hp,pmass,ddq_xy,x0,v0,a0,npart,xyzh,vxyz,axyz,&
  use infile_utils, only:open_db_from_file,inopts,read_inopt,close_db
  use physcon,      only:pi
  use mpiutils,     only:reduceall_mpi
+ use part,         only:get_pmass
  real,    intent(out) :: hx(4),hp(4),ddq_xy(3,3)
  real,    intent(in)  :: xyzh(:,:), vxyz(:,:), axyz(:,:), pmass,x0(3),v0(3),a0(3)
  integer, intent(in)  :: npart
  real,    intent(inout), optional :: axyz1(:,:) !optional, only if there are external forces
  integer, intent(in),    optional :: nptmass
  real,    intent(in),    optional :: xyzmh_ptmass(:,:), vxyz_ptmass(:,:),fxyz_ptmass(:,:)
- real                          :: ddq(6),x,y,z,vx,vy,vz,ax,ay,az,fac,r2
+ real                          :: ddq(6),x,y,z,vx,vy,vz,ax,ay,az,fac,r2,pmassi
  real                          :: xp,yp,zp,vxp,vyp,vzp,axp,ayp,azp,mp
  integer                       :: i
  real                          :: eta,phi,sinphi,cosphi,sineta,coseta,cosphi2,sinphi2,&
@@ -81,7 +82,7 @@ subroutine calculate_strain(hx,hp,pmass,ddq_xy,x0,v0,a0,npart,xyzh,vxyz,axyz,&
  ddq(:) = 0.
  !$omp parallel do default(none) &
  !$omp shared(npart,xyzh,vxyz,axyz,axyz1,pmass,x0,v0,a0) &
- !$omp private(i,x,y,z,vx,vy,vz,ax,ay,az,r2) &
+ !$omp private(i,x,y,z,vx,vy,vz,ax,ay,az,r2,pmassi) &
  !$omp reduction(+:ddq)
  do i=1,npart
     if (xyzh(4,i) > tiny(xyzh)) then  !if not accreted
@@ -100,6 +101,7 @@ subroutine calculate_strain(hx,hp,pmass,ddq_xy,x0,v0,a0,npart,xyzh,vxyz,axyz,&
           az = az + axyz1(3,i)
        endif
        r2 = dot_product(xyzh(1:3,i),xyzh(1:3,i))
+       pmassi = get_pmass(i,.false.)
 
        ! calculate the components of the traceless quadrupole moment Q--not necessary but maybe useful
        !q(1) = q(1) + pmass*(x*x)!-onethird*r2) !qxx
@@ -110,12 +112,12 @@ subroutine calculate_strain(hx,hp,pmass,ddq_xy,x0,v0,a0,npart,xyzh,vxyz,axyz,&
        !q(6) = q(6) + pmass*(z*z)!-onethird*r2) !qzz
 
        ! second time derivative of the traceless quadrupole moment Q
-       ddq(1) = ddq(1) + pmass*(2.*vx*vx+x*ax+x*ax) !ddqxx
-       ddq(2) = ddq(2) + pmass*(2.*vx*vy+x*ay+y*ax) !ddqxy
-       ddq(3) = ddq(3) + pmass*(2.*vx*vz+x*az+z*ax) !ddqxz
-       ddq(4) = ddq(4) + pmass*(2.*vy*vy+y*ay+y*ay) !ddqyy
-       ddq(5) = ddq(5) + pmass*(2.*vy*vz+y*az+z*ay) !ddqyz
-       ddq(6) = ddq(6) + pmass*(2.*vz*vz+z*az+z*az) !ddqzz
+       ddq(1) = ddq(1) + pmassi*(2.*vx*vx+x*ax+x*ax) !ddqxx
+       ddq(2) = ddq(2) + pmassi*(2.*vx*vy+x*ay+y*ax) !ddqxy
+       ddq(3) = ddq(3) + pmassi*(2.*vx*vz+x*az+z*ax) !ddqxz
+       ddq(4) = ddq(4) + pmassi*(2.*vy*vy+y*ay+y*ay) !ddqyy
+       ddq(5) = ddq(5) + pmassi*(2.*vy*vz+y*az+z*ay) !ddqyz
+       ddq(6) = ddq(6) + pmassi*(2.*vz*vz+z*az+z*az) !ddqzz
     endif
  enddo
  !omp end parallel do
