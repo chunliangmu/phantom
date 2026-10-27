@@ -200,7 +200,7 @@ subroutine test_apr(ntests,npass)
  call update_test_scores(ntests,nfailed,npass)
 
  ! test the dust moments for dust nucleations
- call test_apr_dust(ntests,npass)
+ call test_apr_dust_nuc(ntests,npass)
  call test_apr_injection(ntests,npass)
 
  ! nearest neighbour search and refinement by several levels at once
@@ -553,7 +553,7 @@ end subroutine get_apr_totals
 !  The same average also conserves the mass-weighted opacity exactly.
 !+
 !--------------------------------------------
-subroutine test_apr_dust(ntests,npass)
+subroutine test_apr_dust_nuc(ntests,npass)
  use part,         only:npart,xyzh,vxyzu,fxyzu,apr_level,nucleation,n_nucleation,&
                         idJstar,idK0,idK1,idK2,idK3,idkappa,dust_temp,rho,get_pmass
  use dust_formation, only:init_nucleation,calc_kappa_dust,evolve_chem
@@ -674,7 +674,7 @@ subroutine test_apr_dust(ntests,npass)
  inucleation = 0
  store_dust_temperature = .false.
 
-end subroutine test_apr_dust
+end subroutine test_apr_dust_nuc
 
 !--------------------------------------------
 !+
