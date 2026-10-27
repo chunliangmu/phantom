@@ -1158,7 +1158,7 @@ subroutine read_phantom_arrays(i1,i2,noffset,narraylengths,nums,npartread,nparto
                      got_abund,got_dustfrac,got_sink_data,got_sink_vels,got_sink_sfprop,got_Bxyz, &
                      got_psi,got_dustprop,got_pxyzu,got_VrelVf,got_dustgasprop,got_rad, &
                      got_radprop,got_Tdust,got_eosvars,got_taumean,got_dudt,got_ueqi,got_ttherm, &
-                     got_nucleation,got_iorig,got_iseed_sink,got_apr_level,iphase,xyzh,vxyzu,pxyzu,alphaind, &
+                     got_nucleation,got_iorig,got_iseed_sink,got_apr_level,got_rho,iphase,xyzh,vxyzu,pxyzu,alphaind, &
                      xyzmh_ptmass,Bevol,iorig,iseed_sink,iprint,ierr)
 
  if (.not. phantomdump) call set_gas_particle_mass(mass_sphng)

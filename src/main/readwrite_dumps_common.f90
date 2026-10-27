@@ -570,13 +570,13 @@ subroutine check_arrays(i1,i2,noffset,npartoftype,npartread,nptmass,nsinkpropert
                         got_abund,got_dustfrac,got_sink_data,got_sink_vels,got_sink_sfprop,got_Bxyz,got_psi, &
                         got_dustprop,got_pxyzu,got_VrelVf,got_dustgasprop,got_rad,got_radprop,got_Tdust, &
                         got_eosvars,got_taumean,got_dudt,got_ueqi,got_ttherm,got_nucleation,got_iorig, &
-                        got_iseed_sink,got_apr_level,iphase,xyzh,vxyzu,pxyzu,alphaind,xyzmh_ptmass,Bevol,&
+                        got_iseed_sink,got_apr_level,got_rho,iphase,xyzh,vxyzu,pxyzu,alphaind,xyzmh_ptmass,Bevol,&
                         iorig,iseed_sink,iprint,ierr)
  use dim,  only:maxp,maxvxyzu,maxalpha,maxBevol,mhd,h2chemistry,use_dustgrowth,gr,&
                 do_radiation,store_dust_temperature,do_nucleation,use_krome,use_apr,inject_parts
  use eos,  only:ieos,polyk,gamma,eos_is_non_ideal
  use part, only:maxphase,isetphase,set_particle_type,igas,ihacc,ihsoft,imacc,ilum,ikappa,&
-                xyzmh_ptmass_label,vxyz_ptmass_label,vxyz_ptmass,get_pmass,rhoh,dustfrac,ndusttypes,norig,&
+                xyzmh_ptmass_label,vxyz_ptmass_label,vxyz_ptmass,get_pmass,rhoh,rho,dustfrac,ndusttypes,norig,&
                 itemp,iX,iZ,imu,apr_level
  use io,   only:warning,fatal,id,master
  use options,        only:alpha,use_dustfrac,use_var_comp
@@ -590,6 +590,7 @@ subroutine check_arrays(i1,i2,noffset,npartoftype,npartread,nptmass,nsinkpropert
  logical,         intent(in)    :: got_krome_mols(:),got_krome_gamma,got_krome_mu,got_krome_T
  logical,         intent(in)    :: got_psi,got_Tdust,got_eosvars(:),got_nucleation(:),got_pxyzu(:),got_rad(:)
  logical,         intent(in)    :: got_radprop(:),got_iorig,got_apr_level,got_iseed_sink,got_dudt,got_taumean,got_ueqi,got_ttherm
+ logical,         intent(in)    :: got_rho
  integer(kind=1), intent(inout) :: iphase(:)
  integer(kind=8), intent(inout) :: iorig(:),iseed_sink(:)
  real,            intent(inout) :: vxyzu(:,:),Bevol(:,:),pxyzu(:,:)
@@ -665,7 +666,13 @@ subroutine check_arrays(i1,i2,noffset,npartoftype,npartread,nptmass,nsinkpropert
        if (id==master .and. i1==1) write(*,"(/,a,/)") 'WARNING: u not in file but setting u = 3/2 * cs^2'
     else
        do i=i1,i2
-          vxyzu(4,i) = (1.0/(gamma-1.0))*polyk*rhoh(xyzh(4,i),get_pmass(i,use_gas))**(gamma - 1.)
+          if (got_rho) then
+             ! density was stored in the file (e.g. APR/two_kernel): use it directly
+             vxyzu(4,i) = (1.0/(gamma-1.0))*polyk*rho(i)**(gamma - 1.)
+          else
+             ! legacy file without rho: rho = m (hfact/h)^3 is exact only for equal masses
+             vxyzu(4,i) = (1.0/(gamma-1.0))*polyk*rhoh(xyzh(4,i),get_pmass(i,use_gas))**(gamma - 1.)
+          endif
           !print*,'u = ',vxyzu(4,i)
        enddo
        if (id==master .and. i1==1) write(*,"(/,a,/)") 'WARNING: u not in file but setting u = (K*rho**(gamma-1))/(gamma-1)'

@@ -16,8 +16,8 @@ module densityforce
 ! :Runtime parameters: None
 !
 ! :Dependencies: boundary, dim, io, io_summary, kdtree, kernel, mpidens,
-!   mpiderivs, mpimemory, mpiutils, neighkdtree, omputils, options, part,
-!   timestep, timing, viscosity
+!   mpiderivs, mpimemory, mpiutils, neighkdtree, options, part, timestep,
+!   timing, viscosity
 !
  use dim,     only:maxdvdx,maxp,maxrhosum,maxdustlarge
  use dim,     only:calculate_density,calculate_divcurlB
@@ -290,7 +290,6 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
  call get_timings(t1,tcpu1)
  !$omp end single
 
-
  !$omp do schedule(runtime)
  over_cells: do ia=1,nactive_leaves
     icell = active_leaves(ia)
@@ -362,7 +361,6 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
  enddo over_cells
  !$omp enddo
 
-
  if (mpi) then
     call recv_while_wait(stack_remote,cell_counters)
  endif
@@ -407,7 +405,6 @@ subroutine densityiterate(icall,npart,nactive,xyzh,vxyzu,divcurlv,divcurlB,Bevol
           call compute_cell(cell,listneigh,nneigh,getdv,getdB,Bevol,xyzh,vxyzu,fxyzu,fext,xyzcache,rad,apr_level)
           remote_export = .false.
           remote_export(cell%owner+1) = .true. ! use remote_export array to send back to the owner
-
 
           call send_cell(cell,remote_export,stack_waiting,cell_counters) ! send the cell back to owner
        enddo over_remote
@@ -1859,7 +1856,8 @@ subroutine get_density_at_pos(x,rho,itype)
  logical :: same_type
 
  call getneigh_pos(x,0.,0.,listneigh,nneigh,xyzcache,maxcache,leaf_is_active,get_j=.true.)
- same_type=.true.
+ same_type = .true.
+ iamtypej  = itype
  rho = 0.
  loop_over_neigh: do n=1,nneigh
     j = listneigh(n)
