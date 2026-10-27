@@ -155,7 +155,8 @@ subroutine init_filfac(npart,xyzh,vxyzu,rho)
                    rhogas = rhoi*(1-dustfrac(1,i))
                    cs = get_spsound(3,xyzh(:,i),rhogas,vxyzu(:,i))
                 else
-                   ! bootstrap gas density from h (dustgasprop not yet available for two-fluid dust)
+                   ! bootstrap gas density from h (dustgasprop not yet available for two-fluid dust);
+                   ! APR refines gas and dust together, so use the gas mass at this level
                    rhogas = rhoh(xyzh(4,i),get_pmass(i,.true.))
                    cs = get_spsound(3,xyzh(:,i),rhogas,vxyzu(:,i))
                    rhoi = rhogas + rho(i)

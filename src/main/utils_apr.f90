@@ -23,7 +23,7 @@ module utils_apr
 !   - split_dir      : *1: tangent to boundary, 2: along trajectory, 3: purely randomly*
 !   - track_part     : *number of sink to track*
 !
-! :Dependencies: infile_utils, io, part, ptmass
+! :Dependencies: fileutils, infile_utils, io, part, ptmass
 !
 
  use ptmass, only:rho_crit_cgs
@@ -275,7 +275,8 @@ end subroutine read_apr_mfrac
 !+
 !-----------------------------------------------------------------------
 subroutine write_aprtrack(tdump,dumpfile,evfile)
- use io, only:iaprdump,error
+ use io,        only:iaprdump,error
+ use fileutils, only:numfromfile
  real,             intent(in) :: tdump
  character(len=*), intent(in) :: dumpfile,evfile
  integer :: ierr, i, j
@@ -284,7 +285,7 @@ subroutine write_aprtrack(tdump,dumpfile,evfile)
  character(len=11) :: label
  character(len=256) :: fmt
  character(len=len(evfile)) :: fileprefix
- integer :: dumpfile_int, dump_length, start_pos, idot
+ integer :: dumpfile_int, idot
  logical :: iexist
 
  if (ntrack == 0) return ! nothing to do here
@@ -295,10 +296,8 @@ subroutine write_aprtrack(tdump,dumpfile,evfile)
  if (idot <= 1) idot = len_trim(evfile)
  fileprefix = evfile(1:idot)
 
- ! clever formatting
- dump_length = len_trim(dumpfile)
- start_pos = dump_length - 5 + 1
- read(dumpfile(start_pos:dump_length), *) dumpfile_int
+ ! number at the end of the dump file name
+ dumpfile_int = numfromfile(dumpfile)
  ! dynamically make the formatting string to accomodate the right number of regions
  fmt = '(ES18.10,2X,I16.5,2X,3(ES18.10,1X)'
  do j = 1,apr_max_in - 1

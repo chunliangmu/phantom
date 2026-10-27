@@ -939,7 +939,7 @@ subroutine get_force(nptmass,npart,nsubsteps,ntypes,timei,dtextforce,xyzh,vxyzu,
              pmassi = massoftype(itype)
           endif
        elseif (use_apr) then
-          pmassi = aprmassoftype(itype,apr_level(i))
+          pmassi = aprmassoftype(igas,apr_level(i))
        endif
        fextx = 0.
        fexty = 0.

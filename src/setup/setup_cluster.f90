@@ -29,8 +29,8 @@ module setup
 !
 ! :Dependencies: HIIRegion, centreofmass, cooling, datafiles, dim, eos,
 !   infile_utils, io, kernel, mpidomain, options, part, physcon, prompting,
-!   ptmass, setup_params, setvfield, spherical, subgroup,
-!   timestep, units, utils_shuffleparticles, velfield
+!   ptmass, setup_params, setvfield, spherical, subgroup, timestep, units,
+!   utils_shuffleparticles, velfield
 !
  use dim, only:maxvxyzu,mhd
  implicit none
@@ -114,7 +114,7 @@ subroutine setpart(id,npart,npartoftype,xyzh,massoftype,vxyzu,polyk,gamma,hfact,
  if (ierr /= 0) stop 'rerun phantomsetup after editing .setup file'
 
  !--Set units
- call set_units(dist=dist_fac*pc,mass=mass_fac*solarm,G=1.)
+ call set_units(dist=dist_fac*pc,mass=mass_fac*solarm,G=1.d0)
 
  !--Define remaining variables using the inputs
  polyk         = gamma*kboltz*Temperature/(mu*mass_proton_cgs)*(utime/udist)**2

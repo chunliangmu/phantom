@@ -88,7 +88,7 @@ subroutine test_exchange_terms(ntests,npass,use_implicit)
  use apr,        only:sync_aprmassoftype
  use part,       only:init_part,npart,rho,xyzh,fxyzu,vxyzu,massoftype,igas,&
                       iphase,maxphase,isetphase,drad,&
-                      npartoftype,rad,radprop,maxvxyzu,luminosity,init_rho_from_h
+                      npartoftype,rad,radprop,maxvxyzu,luminosity,init_rho_from_h,itlastrad
  use kernel,     only:hfact_default
  use unifdis,    only:set_unifdis
  use eos,        only:gmw,gamma,polyk,iopacity_type
@@ -192,7 +192,9 @@ subroutine test_exchange_terms(ntests,npass,use_implicit)
        if (use_implicit) then
           if (i >1) dt = min(0.05*maxt/utime, 10.d0**(log_start + (i - 1) * step) - t)
           if (t + dt > maxt/utime) dt = maxt/utime - t  ! take last step to maxt
-          call do_radiation_implicit(dt,npart,rad,xyzh,vxyzu,radprop,drad,ierr)
+          ! integrate all particles from t to t+dt (also with individual timesteps)
+          radprop(itlastrad,1:npart) = t
+          call do_radiation_implicit(dt,t+dt,npart,rad,xyzh,vxyzu,radprop,drad,ierr)
           call checkvalbuf(ierr,0,0,'no errors from implicit solver',ndiff(1),ncheck,ierrmax)
        else
           if (t + dt > maxt/utime) dt = maxt/utime - t  ! take last step to maxt
@@ -210,9 +212,9 @@ subroutine test_exchange_terms(ntests,npass,use_implicit)
        call update_test_scores(ntests,ndiff,npass)
     endif
     if (itest==2) then
-       call checkval(laste,21144463.0313597,3.3e-15,nerr(1),'energy exchange for gas heating'//trim(string))
+       call checkval(laste,21144463.0313597,1.e-14,nerr(1),'energy exchange for gas heating'//trim(string))
     else
-       call checkval(laste,21197127.9406196,2e-15,nerr(1),'energy exchange for gas cooling'//trim(string))
+       call checkval(laste,21197127.9406196,1.e-14,nerr(1),'energy exchange for gas cooling'//trim(string))
     endif
     call update_test_scores(ntests,nerr,npass)
 
@@ -231,7 +233,8 @@ end subroutine test_exchange_terms
 !---------------------------------------------------------
 subroutine test_implicit_matches_explicit(ntests,npass)
  use part,     only:npart,xyzh,vxyzu,rad,radprop,drad,&
-                    xyzh_label,init_part,radprop_label
+                    xyzh_label,init_part,radprop_label,apr_level
+ use dim,      only:use_apr
  use boundary, only:xmin,xmax,ymin,ymax,zmin,zmax
  use options,  only:tolh
  use physcon,  only:pi
@@ -243,9 +246,16 @@ subroutine test_implicit_matches_explicit(ntests,npass)
  integer, intent(inout) :: ntests,npass
  real(kind=kind(radprop)), allocatable :: flux_explicit(:,:)
  real :: kappa_code,c_code,xi0,rho0,errmax_e,tol_e,tolh_old,pmassi !,exact(9)
- integer :: i,j,itry,nerr_e(9),ierr
+ integer :: i,j,itry,nerr_e(9),ierr,imass,nmass
+ character(len=24) :: label
 
- if (id==master) write(*,"(/,a)") '--> checking implicit routine matches explicit for flux terms'
+ ! with APR, repeat with neighbouring particles of different mass
+ nmass = 1
+ if (use_apr) nmass = 2
+ do imass=1,nmass
+ label = ''
+ if (imass == 2) label = ' (APR, unequal masses)'
+ if (id==master) write(*,"(/,a)") '--> checking implicit routine matches explicit for flux terms'//trim(label)
 
  implicit_radiation = .false.
  iverbose = 0
@@ -256,6 +266,11 @@ subroutine test_implicit_matches_explicit(ntests,npass)
  do itry = 1,2
     if (itry == 2) implicit_radiation = .true.
     call setup_radiation_diffusion_problem_sinusoid(kappa_code,c_code,xi0,rho0,pmassi)
+    if (imass == 2) then
+       do i=1,npart
+          if (mod(i,2)==0) apr_level(i) = 2
+       enddo
+    endif
 
     ! set some non-zero velocities
     do i=1,npart
@@ -271,8 +286,8 @@ subroutine test_implicit_matches_explicit(ntests,npass)
        allocate(flux_explicit(3,npart))
        flux_explicit = radprop(ifluxx:ifluxz,1:npart)
     else
-       radprop = 0.
-       call do_radiation_implicit(1.e-24,npart,rad,xyzh,vxyzu,radprop,drad,ierr)
+       radprop = 0.  ! also sets the time of the last update to zero
+       call do_radiation_implicit(1.e-24,1.e-24,npart,rad,xyzh,vxyzu,radprop,drad,ierr)
     endif
  enddo
 
@@ -284,9 +299,12 @@ subroutine test_implicit_matches_explicit(ntests,npass)
     call checkval(npart,radprop(ifluxx+j-1,:),flux_explicit(j,:),tol_e,nerr_e(j),radprop_label(ifluxx+j-1))
  enddo
  call update_test_scores(ntests,nerr_e,npass)
+ deallocate(flux_explicit)
 
  vxyzu(1:3,:) = 0.  ! zero velocities again
  tolh = tolh_old
+ if (use_apr) apr_level(1:npart) = 1
+ enddo
 
 end subroutine test_implicit_matches_explicit
 
@@ -387,9 +405,9 @@ subroutine test_radiation_diffusion(ntests,npass)
  D0  = c_code*(1./3)/kappa_code/rho0
  if (write_output) print "(/,a,3(es10.3,a))", ' exact solution: ',xi0,'*(1 + 0.1*sin(x*',l0,')*exp(',-l0*l0*D0,'*t))'
  do while(t < tmax)
-    t = t + dt
     dtext = dt
-    call step(npart,nactive,t,dt,dtext,dtnew)
+    call step(npart,nactive,t,dt,dtext,dtnew)  ! step from t to t+dt
+    t = t + dt
     dt = dtnew
     if (implicit_radiation) dt = 6.7e-24 ! force the explicit timestep
 

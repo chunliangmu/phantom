@@ -168,8 +168,8 @@ module part
 !
  integer, public :: ien_type
  integer, public, parameter :: ien_entropy = 1, &
-                               ien_etotal  = 2, &
-                               ien_entropy_s = 3
+                               ien_entropy_s = 2, &
+                               ien_etotal  = 3   ! internal to cons2primsolver, not a runtime option
 !
 !--one-fluid dust (small grains)
 !
@@ -192,6 +192,8 @@ module part
  real, allocatable :: sqrtgs(:) ! sqrtg(maxgr)
 ! cached GR metric-gradient force from kickdrift_gr (reused in get_force)
  real, allocatable :: fgr(:,:)       ! fgr(3,maxgr)
+! coordinate acceleration dv/dt, used in the Cullen & Dehnen shock detector
+ real, allocatable :: agr(:,:)       ! agr(3,maxgr)
 !
 !--sink particles in General relativity
 !
@@ -311,9 +313,10 @@ module part
                        ilambda = 9, &
                        iedd   = 10, &
                        icv    = 11, &
-                       maxradprop = 11
+                       itlastrad = 12, & ! time of the last implicit radiation update
+                       maxradprop = 12
  character(len=*), parameter :: radprop_label(maxradprop) = &
-    (/'radFx ','radFy ','radFz ','kappa ','thick ','numph ','vorcl ','radP  ','lambda','edd   ','cv    '/)
+    (/'radFx ','radFy ','radFz ','kappa ','thick ','numph ','vorcl ','radP  ','lambda','edd   ','cv    ','tlast '/)
 !
 !--lightcurves, store du/dt for each particle
 !
@@ -405,7 +408,7 @@ module part
 !--size of the buffer required for transferring particle
 !  information between MPI threads
 !
- integer, parameter :: ipartbufsize = 131
+ integer, parameter :: ipartbufsize = 138
 
  real            :: hfact,Bextx,Bexty,Bextz,tolh
  integer         :: npart
@@ -496,6 +499,7 @@ subroutine allocate_part
  call allocate_array('sqrtgs', sqrtgs, maxgr)
  if (gr) then
     call allocate_array('fgr', fgr, 3, maxgr)
+    call allocate_array('agr', agr, 3, maxgr)
     call allocate_array('fgr_ptmass', fgr_ptmass, 3, maxptmassgr)
  endif
  call allocate_array('pxyzu_ptmass', pxyzu_ptmass, maxvxyzu, maxptmassgr)
@@ -597,6 +601,7 @@ subroutine deallocate_part
  if (allocated(tmunus))       deallocate(tmunus)
  if (allocated(sqrtgs))       deallocate(sqrtgs)
  if (allocated(fgr))          deallocate(fgr)
+ if (allocated(agr))          deallocate(agr)
  if (allocated(fgr_ptmass))     deallocate(fgr_ptmass)
  if (allocated(pxyzu_ptmass)) deallocate(pxyzu_ptmass)
  if (allocated(metrics_ptmass))  deallocate(metrics_ptmass)
@@ -679,6 +684,10 @@ subroutine init_part
 !--initialise sinktree array
  shortsinktree = 1
  fxyz_ptmass_tree = 0.
+!--initialise external forces and GR metric derivatives, used before being recomputed
+ fext = 0.
+ metricderivs = 0.
+ if (gr) agr = 0.
  ! initialise arrays not passed to setup routine to zero
  rho = 0. ! flags density as not yet computed, see init_rho_from_h
  if (mhd) then
@@ -914,6 +923,8 @@ subroutine init_rho_from_h(i1,i2)
  if (present(i1)) ia = i1
  if (present(i2)) ib = i2
  iamtypei = igas
+ ! massoftype may have just been set by the calling routine
+ call sync_aprmassoftype()
 
  do i=ia,ib
     if (.not. isdead_or_accreted(xyzh(4,i))) then
@@ -1080,6 +1091,24 @@ subroutine recount_npartoftype
  enddo
 
 end subroutine recount_npartoftype
+
+!----------------------------------------------------------------
+!+
+!  set the mass of each particle type at every refinement level
+!  from massoftype (each level halves the mass of the previous one)
+!+
+!----------------------------------------------------------------
+subroutine sync_aprmassoftype
+ integer :: l,nlevels
+
+ ! loop bound is a variable because apr_maxlevel=0 without APR and
+ ! gfortran warns of a zero-trip loop for constant bounds, even inside an if
+ nlevels = apr_maxlevel
+ do l=1,nlevels
+    aprmassoftype(:,l) = massoftype(:)/2.**(l-1)
+ enddo
+
+end subroutine sync_aprmassoftype
 
 !----------------------------------------------
 !+
@@ -1351,6 +1380,7 @@ subroutine copy_particle(src,dst,new_part)
  if (gr) then
     pxyzu(:,dst) = pxyzu(:,src)
     if (allocated(fgr)) fgr(:,dst) = fgr(:,src)
+    if (allocated(agr)) agr(:,dst) = agr(:,src)
  endif
  divcurlv(:,dst)  = divcurlv(:,src)
  if (maxalpha ==maxp) alphaind(:,dst) = alphaind(:,src)
@@ -1435,6 +1465,7 @@ subroutine copy_particle_all(src,dst,new_part)
     endif
     dens(dst) = dens(src)
     if (allocated(fgr)) fgr(:,dst) = fgr(:,src)
+    if (allocated(agr)) agr(:,dst) = agr(:,src)
  endif
 
  divcurlv(:,dst) = divcurlv(:,src)
@@ -1759,6 +1790,8 @@ subroutine fill_sendbuf(i,xtemp,nbuf)
        call fill_buffer(xtemp,pxyzu(:,i),nbuf)
        call fill_buffer(xtemp,ppred(:,i),nbuf)
        call fill_buffer(xtemp,dens(i),nbuf)
+       call fill_buffer(xtemp,agr(:,i),nbuf)
+       call fill_buffer(xtemp,fgr(:,i),nbuf)
     endif
     call fill_buffer(xtemp,fxyzu(:,i),nbuf)
     call fill_buffer(xtemp,fext(:,i),nbuf)
@@ -1848,6 +1881,8 @@ subroutine unfill_buffer(ipart,xbuf)
     pxyzu(:,ipart)       = unfill_buf(xbuf,j,maxvxyzu)
     ppred(:,ipart)       = unfill_buf(xbuf,j,maxvxyzu)
     dens(ipart)          = unfill_buf(xbuf,j)
+    agr(:,ipart)         = unfill_buf(xbuf,j,3)
+    fgr(:,ipart)         = unfill_buf(xbuf,j,3)
  endif
  fxyzu(:,ipart)         = unfill_buf(xbuf,j,maxvxyzu)
  fext(:,ipart)          = unfill_buf(xbuf,j,3)
