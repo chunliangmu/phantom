@@ -126,8 +126,7 @@ contains
 subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
  use part,              only:nptmass,xyzmh_ptmass,vxyz_ptmass,ihacc,ihsoft,igas, &
                              delete_dead_or_accreted_particles,mhd,rho,shuffle_part,&
-                             kill_particle,copy_particle,get_pmass,iphase,iamtype,apr_level,&
-                             isdead_or_accreted
+                             kill_particle,copy_particle,get_pmass,apr_level
  use setbinary,         only:set_binary
  use units,             only:utime
  use physcon,           only:pi
@@ -196,7 +195,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
     nptmass1 = nptmass
     nstar1 = npart
     pmass1 = massoftype(igas)
-    m1 = total_gas_mass()  ! sum of the (possibly unequal, APR) particle masses
+    m1 = total_gas_mass(npart,xyzh)  ! sum of the (possibly unequal, APR) particle masses
     ! primary sink properties (zero if the dump has no sink, i.e. no accretion radius)
     xyzmh1_stash = 0.
     vxyz1_stash  = 0.
@@ -403,7 +402,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
        mcore = 0.
     endif
 
-    primary_mass = total_gas_mass() + mcore
+    primary_mass = total_gas_mass(npart,xyzh) + mcore
 
     call set_triple(primary_mass,cmass1,cmass2,&
                      a1,a2,hacc1,hacc2,hacc3,&
@@ -465,7 +464,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
     endif
 
     ! Centre to new CoM with the companion
-    mass_donor = total_gas_mass() + primarycore_mass
+    mass_donor = total_gas_mass(npart,xyzh) + primarycore_mass
     omega_corotate = sqrt((mass_donor + companion_mass)/separation**3)
     newCoM = companion_mass / (mass_donor + companion_mass) * separation
     companion_xpos = separation - newCoM
@@ -512,7 +511,7 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
     endif
     call close_db(db)
 
-    m1 = total_gas_mass() + primarycore_mass
+    m1 = total_gas_mass(npart,xyzh) + primarycore_mass
     m2 = companion_mass
     a = abs(companion_xpos) + abs(primarycore_xpos)
     print*,' Primary mass from existing file = ',m1,' Msun'
@@ -617,16 +616,21 @@ subroutine modify_dump(npart,npartoftype,massoftype,xyzh,vxyzu)
 
  end select
 
-contains
+end subroutine modify_dump
 
- !----------------------------------------------------------------
- !+
- !  total mass of the gas particles in the dump, accounting for
- !  the unequal particle masses used with adaptive particle refinement
- !+
- !----------------------------------------------------------------
-real function total_gas_mass() result(mtot)
+!----------------------------------------------------------------
+!+
+!  total mass of the gas particles in the dump, accounting for
+!  the unequal particle masses used with adaptive particle refinement
+!+
+!----------------------------------------------------------------
+real function total_gas_mass(npart,xyzh) result(mtot)
+ use part, only:igas,iphase,iamtype,get_pmass,isdead_or_accreted
+ use dim,  only:maxphase,maxp
+ integer, intent(in) :: npart
+ real,    intent(in) :: xyzh(:,:)
  integer :: k,itype
+
  mtot = 0.
  do k = 1,npart
     if (isdead_or_accreted(xyzh(4,k))) cycle
@@ -637,9 +641,8 @@ real function total_gas_mass() result(mtot)
     endif
     if (itype == igas) mtot = mtot + get_pmass(k, maxphase /= maxp)
  enddo
-end function total_gas_mass
 
-end subroutine modify_dump
+end function total_gas_mass
 
 !----------------------------------------------------------------
 !+
