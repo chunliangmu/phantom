@@ -77,7 +77,7 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  use io_summary,      only:summary_initialise
  use setstar_utils,   only:set_star_thermalenergy,set_star_composition
  use apr,             only:init_apr,update_apr
- use utils_apr,       only:apr_start_coarse,split_dir,ref_dir,ntrack,ntrack_max
+ use utils_apr,       only:apr_start_coarse,split_dir,ref_dir,ntrack_max
  use get_apr_level,   only:set_get_apr
  use neighkdtree,     only:allocate_neigh,leaf_is_active
  integer,           intent(in)    :: nt,iptmass_core

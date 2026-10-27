@@ -141,8 +141,8 @@ subroutine set_new_splitpart(i,i_new,v,sep)
  apr_level(i_new) = aprnew
  if (ind_timesteps) call put_in_smallest_bin(i_new)
  if (gravity) then
-    poten(i) = poten(i)*0.5    ! to conserve energy
-    poten(i_new) = poten(i_new)*0.5
+    poten(i) = poten(i)*0.5_4  ! to conserve energy
+    poten(i_new) = poten(i_new)*0.5_4
  endif
 
  ! Edit the old particle that was sent in and kept
