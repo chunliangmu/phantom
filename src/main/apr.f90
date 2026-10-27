@@ -91,14 +91,15 @@ subroutine init_apr(apr_level,ierr)
     ! if we are derefining we make sure that
     ! massoftype(igas) is associated with the
     ! largest particle (don't do it twice accidentally!)
-    if (ref_dir == -1) then
-       if (.not. apr_start_coarse) then
-          massoftype(:) = massoftype(:) * 2.**(apr_max -1)
-       endif
-       top_level = 1
-    else
-       top_level = apr_max
+    if (ref_dir == -1 .and. .not. apr_start_coarse) then
+       massoftype(:) = massoftype(:) * 2.**(apr_max -1)
     endif
+ endif
+
+ if (ref_dir == -1) then
+    top_level = 1
+ else
+    top_level = apr_max
  endif
 
  ! now set the aprmassoftype array, this stores all the masses for the different resolution levels
