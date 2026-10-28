@@ -14,13 +14,15 @@ program phantomsetup
 !
 ! :Usage: phantomsetup fileprefix --maxp=10000000 --nprocsfake=1
 !
-! :Dependencies: boundary, checksetup, dim, eos, fileutils, gravwaveutils,
-!   io, io_summary, krome_interface, memory, metric, mpidomain, mpiutils,
-!   options, part, physcon, readwrite_dumps, readwrite_infile, setBfield,
-!   setup, setup_params, systemutils, timestep, units
+! :Dependencies: boundary, checksetup, dim, dust_formation, eos, fileutils,
+!   gravwaveutils, io, io_summary, krome_interface, memory, metric,
+!   mpidomain, mpiutils, options, part, physcon, readwrite_dumps,
+!   readwrite_infile, setBfield, setup, setup_params, systemutils,
+!   timestep, units
 !
  use memory,          only:allocate_memory,deallocate_memory
- use dim,             only:tagline,mpi,maxp_alloc,gr
+ use dim,             only:tagline,mpi,maxp_alloc,gr,do_nucleation
+ use dust_formation,  only:init_nucleation
  use part,            only:xyzh,massoftype,hfact,vxyzu,npart,npartoftype, &
                            Bxyz,Bextx,Bexty,Bextz,&
                            isetphase,igas,iamtype,labeltype,mhd,init_part
@@ -93,7 +95,6 @@ program phantomsetup
 !  part, not kdtree or neighbour list
 !
  n_alloc = get_command_option('maxp',default=int(maxp_alloc))
- call allocate_memory(n_alloc, part_only=.true.)
 
  call set_default_options
 
@@ -106,6 +107,12 @@ program phantomsetup
 !--if input file exists, read it
 !
  if (iexist) call read_infile(infile,logfile,evfile,dumpfile)
+
+!
+!--allocate after reading the input file, since runtime options determine
+!  which arrays are required and how large they need to be (e.g. nucleation)
+!
+ call allocate_memory(n_alloc, part_only=.true.)
 
 !
 !--reset logfile name
@@ -133,6 +140,10 @@ program phantomsetup
     myid1 = myid
     if (mpi) myid1 = id
     call setpart(myid1,npart,npartoftype(:),xyzh,massoftype(:),vxyzu,polyk,gamma,hfact,time,fileprefix)
+!
+!--initialise dust nucleation array before checks and dump output
+!
+    if (do_nucleation) call init_nucleation
 !
 !--setup magnetic field if code compiled with MHD
 !

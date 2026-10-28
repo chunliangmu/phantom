@@ -789,6 +789,15 @@ subroutine check_setup_nucleation(npart,nerror)
  integer :: i,j,nbad(n_nucleation)
 
  nbad = 0
+ if (.not.allocated(nucleation)) then
+    print*,'ERROR: nucleation array not allocated for ',npart,' particles'
+    nerror = nerror + 1
+    return
+ elseif (size(nucleation,2) < npart) then
+    print*,'ERROR: nucleation array has ',size(nucleation,2),' entries but npart = ',npart
+    nerror = nerror + 1
+    return
+ endif
  !-- Check that all the parameters are > 0 when needed
  do i=1,npart
     if (nucleation(idmu,i) < 0.1) nbad(idmu) = nbad(idmu) + 1

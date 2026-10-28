@@ -17,11 +17,11 @@ module relaxstar
 !   - maxits   : *maximum number of relaxation iterations*
 !   - tol_ekin : *tolerance on ekin/epot to stop relaxation*
 !
-! :Dependencies: apr, checksetup, damping, deriv, dim,
-!   dump_utils, energies, eos, externalforces, fileutils, infile_utils,
-!   initial, io, io_summary, memory, neighkdtree, options, part, physcon,
-!   ptmass, readwrite_dumps, setstar_utils, step_lf_global, table_utils,
-!   units
+! :Dependencies: apr, checksetup, damping, deriv, dim, dump_utils,
+!   dust_formation, energies, eos, externalforces, fileutils,
+!   get_apr_level, infile_utils, initial, io, io_summary, memory,
+!   neighkdtree, options, part, physcon, ptmass, readwrite_dumps,
+!   setstar_utils, step_lf_global, table_utils, units, utils_apr
 !
  implicit none
  public :: relax_star,write_options_relax,read_options_relax
@@ -62,7 +62,8 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  use, intrinsic :: ieee_arithmetic, only:ieee_is_finite
  use table_utils,     only:yinterp
  use deriv,           only:get_derivs_global
- use dim,             only:maxp,maxvxyzu,gr,gravity,use_apr
+ use dim,             only:maxp,maxvxyzu,gr,gravity,use_apr,do_nucleation
+ use dust_formation,  only:init_nucleation
  use part,            only:vxyzu,rad,eos_vars,massoftype,igas,apr_level,fxyzu,init_rho_from_h
  use step_lf_global,  only:init_step,step
  use initial,         only:initialise
@@ -166,6 +167,10 @@ subroutine relax_star(nt,rhotab,pr,temp,r,npart,xyzh,use_var_comp,Xfrac,Yfrac,mu
  call set_options_for_relaxation(tdyn)
  call summary_initialise()
  if (gr) call shift_star_origin(x0,i1,npart,xyzh,iptmass_core,xyzmh_ptmass)
+ !
+ ! initialise dust nucleation array before it is checked below
+ !
+ if (do_nucleation) call init_nucleation
  !
  ! check particle setup is sensible
  !
