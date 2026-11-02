@@ -86,7 +86,7 @@ end subroutine test_radiation
 !+
 !----------------------------------------------------
 subroutine test_implicit_corrector(ntests,npass)
- use part,             only:npart,vxyzu,rad,init_part,drad,radprop
+ use part,             only:npart,vxyzu,rad,init_part
  use deriv,            only:get_derivs_global
  use radiation_utils,  only:implicit_radiation
  real, allocatable :: xi_old(:),u_old(:)

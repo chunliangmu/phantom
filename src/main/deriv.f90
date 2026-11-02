@@ -208,8 +208,11 @@ subroutine derivs(icall,npart,nactive,xyzh,vxyzu,fxyzu,fext,divcurlv,divcurlB,&
 
  !
  ! implicit radiation update
+ ! Apply this only for the predictor.
+ ! Corrector calls (icall=2) re-evaluate velocity-dependent forces with the same dt
+ ! and must not advance the radiation and gas energies a second time.
  !
- if (do_radiation .and. implicit_radiation .and. dt > 0.) then
+ if (do_radiation .and. implicit_radiation .and. dt > 0. .and. icall == 1) then
     call do_radiation_implicit(dt,time,npart,rad,xyzh,vxyzu,radprop,drad,ierr)
     if (ierr /= 0 .and. ierr /= ierr_failed_to_converge) call fatal('radiation','Failed in radiation')
     call do_timing('radiation',tlast,tcpulast)
