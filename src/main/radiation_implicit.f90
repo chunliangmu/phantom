@@ -1270,7 +1270,7 @@ subroutine store_radiation_results(ncompactlocal,npart,ivar,EU0,rad,radprop,vxyz
  use options, only:use_dustfrac
  integer, intent(in)  :: ncompactlocal,npart,ivar(:,:)
  real,    intent(in)  :: EU0(6,npart),time
- real,    intent(out) :: rad(:,:),radprop(:,:),vxyzu(:,:)
+ real,    intent(inout) :: rad(:,:),radprop(:,:),vxyzu(:,:)
  integer :: i,n
  real :: rhogas
 

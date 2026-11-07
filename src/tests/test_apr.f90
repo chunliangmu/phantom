@@ -15,8 +15,8 @@ module testapr
 ! :Runtime parameters: None
 !
 ! :Dependencies: allocutils, apr, boundary, deriv, dim, dust_formation,
-!   energies, eos, io, mpidomain, mpiutils, options, part, physcon, random, testutils,
-!   unifdis, units, utils_apr， partinject
+!   energies, eos, io, mpidomain, mpiutils, options, part, partinject,
+!   physcon, random, testutils, unifdis, units, utils_apr
 !
  use testutils, only:checkval,update_test_scores
  use io,        only:id,master,fatal,warning

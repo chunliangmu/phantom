@@ -170,8 +170,8 @@ subroutine set_split_luminosity(i,i_new)
 
  ! luminosity is allocated with size zero when it is not in use
  if (maxlum == maxp) then
-    luminosity(i)     = 0.5*luminosity(i)
-    luminosity(i_new) = 0.5*luminosity(i_new)
+    luminosity(i)     = 0.5_4*luminosity(i)
+    luminosity(i_new) = 0.5_4*luminosity(i_new)
  endif
 
 end subroutine set_split_luminosity

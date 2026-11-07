@@ -54,10 +54,9 @@ subroutine test_radiation(ntests,npass)
  call test_exchange_terms(ntests,npass,use_implicit=.false.)
  if (.not.mpi) call test_exchange_terms(ntests,npass,use_implicit=.true.)
  if (.not.mpi) call test_implicit_corrector(ntests,npass)
- if (use_apr .and. .not.mpi) then
-    call test_implicit_growth(ntests,npass)
-    call test_implicit_uneven_masses(ntests,npass)
- endif
+ if (use_apr .and. .not.mpi) call test_implicit_growth(ntests,npass)
+ ! the exact conservation check requires the symmetric periodic neighbour list
+ if (use_apr .and. periodic .and. .not.mpi) call test_implicit_uneven_masses(ntests,npass)
 
  if (.not.periodic) then
     if (id==master) write(*,"(/,a)") '--> SKIPPING TEST OF RADIATION DERIVS (need -DPERIODIC)'
@@ -445,57 +444,57 @@ subroutine test_implicit_matches_explicit(ntests,npass)
  nmass = 1
  if (use_apr) nmass = 2
  do imass=1,nmass
- label = ''
- if (imass == 2) label = ' (APR, unequal masses)'
- if (id==master) write(*,"(/,a)") '--> checking implicit routine matches explicit for flux terms'//trim(label)
+    label = ''
+    if (imass == 2) label = ' (APR, unequal masses)'
+    if (id==master) write(*,"(/,a)") '--> checking implicit routine matches explicit for flux terms'//trim(label)
 
- implicit_radiation = .false.
- iverbose = 0
- call init_part()
- tolh_old = tolh
- tolh = 1.e-8
- dtmax = 5.e-22
- do itry = 1,2
-    if (itry == 2) implicit_radiation = .true.
-    call setup_radiation_diffusion_problem_sinusoid(kappa_code,c_code,xi0,rho0,pmassi)
-    if (imass == 2) then
+    implicit_radiation = .false.
+    iverbose = 0
+    call init_part()
+    tolh_old = tolh
+    tolh = 1.e-8
+    dtmax = 5.e-22
+    do itry = 1,2
+       if (itry == 2) implicit_radiation = .true.
+       call setup_radiation_diffusion_problem_sinusoid(kappa_code,c_code,xi0,rho0,pmassi)
+       if (imass == 2) then
+          do i=1,npart
+             if (mod(i,2)==0) apr_level(i) = 2
+          enddo
+       endif
+
+       ! set some non-zero velocities
        do i=1,npart
-          if (mod(i,2)==0) apr_level(i) = 2
+          vxyzu(1,i) = 0.1*sin((xyzh(1,i)-xmin)*2.*pi/(xmax-xmin))
+          vxyzu(2,i) = 0.1*cos((xyzh(2,i)-ymin)*2.*pi/(ymax-ymin))
+          vxyzu(3,i) = 0.1*sin((xyzh(3,i)-zmin)*2.*pi/(zmax-zmin))
        enddo
-    endif
+       call get_derivs_global()
+       if (itry==1) then
+          call get_derivs_global()  ! twice to get density on neighbours correct
 
-    ! set some non-zero velocities
-    do i=1,npart
-       vxyzu(1,i) = 0.1*sin((xyzh(1,i)-xmin)*2.*pi/(xmax-xmin))
-       vxyzu(2,i) = 0.1*cos((xyzh(2,i)-ymin)*2.*pi/(ymax-ymin))
-       vxyzu(3,i) = 0.1*sin((xyzh(3,i)-zmin)*2.*pi/(zmax-zmin))
+          !--allocate and copy flux
+          allocate(flux_explicit(3,npart))
+          flux_explicit = radprop(ifluxx:ifluxz,1:npart)
+       else
+          radprop = 0.  ! also sets the time of the last update to zero
+          call do_radiation_implicit(1.e-24,1.e-24,npart,rad,xyzh,vxyzu,radprop,drad,ierr)
+       endif
     enddo
-    call get_derivs_global()
-    if (itry==1) then
-       call get_derivs_global()  ! twice to get density on neighbours correct
 
-       !--allocate and copy flux
-       allocate(flux_explicit(3,npart))
-       flux_explicit = radprop(ifluxx:ifluxz,1:npart)
-    else
-       radprop = 0.  ! also sets the time of the last update to zero
-       call do_radiation_implicit(1.e-24,1.e-24,npart,rad,xyzh,vxyzu,radprop,drad,ierr)
-    endif
- enddo
+    ! now check that things match
+    tol_e = 1.e-15
+    nerr_e = 0
+    errmax_e = 0.
+    do j=1,3
+       call checkval(npart,radprop(ifluxx+j-1,:),flux_explicit(j,:),tol_e,nerr_e(j),radprop_label(ifluxx+j-1))
+    enddo
+    call update_test_scores(ntests,nerr_e,npass)
+    deallocate(flux_explicit)
 
- ! now check that things match
- tol_e = 1.e-15
- nerr_e = 0
- errmax_e = 0.
- do j=1,3
-    call checkval(npart,radprop(ifluxx+j-1,:),flux_explicit(j,:),tol_e,nerr_e(j),radprop_label(ifluxx+j-1))
- enddo
- call update_test_scores(ntests,nerr_e,npass)
- deallocate(flux_explicit)
-
- vxyzu(1:3,:) = 0.  ! zero velocities again
- tolh = tolh_old
- if (use_apr) apr_level(1:npart) = 1
+    vxyzu(1:3,:) = 0.  ! zero velocities again
+    tolh = tolh_old
+    if (use_apr) apr_level(1:npart) = 1
  enddo
 
 end subroutine test_implicit_matches_explicit
