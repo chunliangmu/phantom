@@ -26,7 +26,7 @@ module radiation_implicit
  use part,            only:ikappa,ilambda,iedd,idkappa,iradxi,iradP,icv,ifluxx,ifluxy,ifluxz,igas,rho,&
                            get_pmass,imu,itlastrad
  use eos,             only:iopacity_type,get_cv,eos_outputs_mu
- use radiation_utils, only:get_kappa,tol_rad,itsmax_rad,cv_type
+ use radiation_utils, only:get_kappa,get_kappa_with_dust,tol_rad,itsmax_rad,cv_type
  use neighcompact,    only:get_compacted_neighbour_list
  implicit none
  integer, parameter :: ierr_failed_to_converge = 1,&
@@ -165,8 +165,8 @@ subroutine save_radiation_energies(npart,rad,xyzh,vxyzu,radprop,drad,origEU,save
     origEU(2,i) = vxyzu(4,i)
     if (save_cv) then
        rhoi = rho(i)
-       radprop(icv,i) = get_cv(cv_type,rhoi,vxyzu(4,i))
-       radprop(ikappa,i) = get_kappa(iopacity_type,vxyzu(4,i),radprop(icv,i),rhoi)
+       radprop(icv,i) = get_cv_particle(i,rhoi,vxyzu(4,i))
+       radprop(ikappa,i) = get_kappa_with_dust(i,iopacity_type,vxyzu(4,i),radprop(icv,i),rhoi)
     endif
     drad(:,i) = 0.  ! Set dxi/dt = 0 for implicit scheme
  enddo
@@ -404,8 +404,8 @@ subroutine fill_arrays(ncompact,ncompactlocal,npart,icompactmax,dt,time,xyzh,vxy
 
        EU0(1,i) = rad(iradxi,i)
        EU0(2,i) = vxyzu(4,i)
-       EU0(3,i) = get_cv(cv_type,rhoi,vxyzu(4,i))
-       EU0(4,i) = get_kappa(iopacity_type,vxyzu(4,i),EU0(3,i),rhoi)
+       EU0(3,i) = get_cv_particle(i,rhoi,vxyzu(4,i))
+       EU0(4,i) = get_kappa_with_dust(i,iopacity_type,vxyzu(4,i),EU0(3,i),rhoi)
        !--flux limiter and Eddington factor from the last update, kept for particles
        !  masked out of the solve; compute_flux overwrites them for the others
        EU0(5,i) = radprop(ilambda,i)
@@ -444,8 +444,8 @@ subroutine fill_arrays(ncompact,ncompactlocal,npart,icompactmax,dt,time,xyzh,vxy
           if (ind_timesteps) then
              EU0(1,j) = rad(iradxi,j)
              EU0(2,j) = vxyzu(4,j)
-             EU0(3,j) = get_cv(cv_type,rhoj,vxyzu(4,j))
-             EU0(4,j) = get_kappa(iopacity_type,vxyzu(4,j),EU0(3,j),rhoj)
+             EU0(3,j) = get_cv_particle(j,rhoj,vxyzu(4,j))
+             EU0(4,j) = get_kappa_with_dust(j,iopacity_type,vxyzu(4,j),EU0(3,j),rhoj)
              !--flux limiter and Eddington factor from the neighbour's last update;
              !  these are recomputed in compute_flux for particles being updated
              EU0(5,j) = radprop(ilambda,j)
@@ -946,8 +946,8 @@ subroutine update_gas_radiation_energy(ivar,vari,npart,ncompactlocal,&
        if (.not. iamtype(iphase(i))==iboundary) then
           EU0(1,i) = E1i
           EU0(2,i) = U1i
-          EU0(3,i) = get_cv(cv_type,rhoi,U1i)
-          EU0(4,i) = get_kappa(iopacity_type,U1i,EU0(3,i),rhoi)
+          EU0(3,i) = get_cv_particle(i,rhoi,U1i)
+          EU0(4,i) = get_kappa_with_dust(i,iopacity_type,U1i,EU0(3,i),rhoi)
        endif
 
        if (store_drad) then  ! use this for testing
@@ -1042,14 +1042,14 @@ subroutine set_heating_cooling_low_rhoT(i,eradi,ugasi,orig_eradi,orig_ugasi,cvi,
  if (.true.) then
     try_loop: do itry = 1,2
        u_found = ugasi  ! ugasi = EU0(2,i)
-       t_found = ugasi/get_cv(cv_type,rhoi,u_found)
+       t_found = ugasi/get_cv_particle(i,rhoi,u_found)
        t_orig = t_found
        do iterationloop = 1,100
           u_last = u_found
           t_last = t_found
 
           u_found = get_u_from_rhoT(rhoi,t_found,ieos)
-          cv1 = get_cv(cv_type,rhoi,u_found)
+          cv1 = get_cv_particle(i,rhoi,u_found)
           t_found = u_found/cv1
           !
           !--For calculating numerical derivative with gas temperature,
@@ -1259,6 +1259,27 @@ subroutine turn_heating_cooling_off(ieqtype,dust_tempi,gas_dust_val,dustgammaval
  dust_term = 0.
 
 end subroutine turn_heating_cooling_off
+
+!---------------------------------------------------------
+!+
+!  get cv consistently with the composition used by the EoS.
+!  Carbon-dust chemistry updates mu and gamma for ieos=2; for
+!  ieos=20 get_cv(cv_type=20) determines the composition itself.
+!+
+!---------------------------------------------------------
+real function get_cv_particle(i,rhoi,ui) result(cv)
+ use dim,  only:do_nucleation
+ use part, only:nucleation,idmu,idgamma
+ integer, intent(in) :: i
+ real,    intent(in) :: rhoi,ui
+
+ if (do_nucleation) then
+    cv = get_cv(cv_type,rhoi,ui,mu_local=nucleation(idmu,i),gamma_local=nucleation(idgamma,i))
+ else
+    cv = get_cv(cv_type,rhoi,ui)
+ endif
+
+end function get_cv_particle
 
 !---------------------------------------------------------
 !+

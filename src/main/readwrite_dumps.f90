@@ -971,7 +971,8 @@ subroutine read_phantom_arrays(i1,i2,noffset,narraylengths,nums,npartread,nparto
                         eos_vars,eos_vars_label,maxeosvars,dustprop,dustprop_label,divcurlv,divcurlv_label,iX,iZ,imu, &
                         VrelVf,VrelVf_label,dustgasprop,dustgasprop_label,filfac,filfac_label,pxyzu,pxyzu_label,dust_temp, &
                         rad,rad_label,radprop,radprop_label,do_radiation,maxirad,maxradprop,ifluxx,ifluxy,ifluxz, &
-                        nucleation,nucleation_label,n_nucleation,ikappa,tau,itau_alloc,tau_lucy,itauL_alloc,&
+                        nucleation,nucleation_label,nucleation_label_legacy,n_nucleation,&
+                        ikappa,idkappa,idmu,idK3,tau,itau_alloc,tau_lucy,itauL_alloc,&
                         ithick,ilambda,iorig,iseed_sink,dt_in,krome_nmols,T_gas_cool,apr_level,init_rho_from_h
  use eos_stamatellos, only:ttherm_store,ueqi_store,tau_store,du_store
  use sphNGutils, only:mass_sphng,got_mass,set_gas_particle_mass
@@ -993,7 +994,8 @@ subroutine read_phantom_arrays(i1,i2,noffset,narraylengths,nums,npartread,nparto
  logical               :: got_filfac,got_divcurlv(4),got_rad(maxirad),got_radprop(maxradprop),got_pxyzu(4)
  logical                :: got_iorig,got_apr_level,got_taumean,got_ueqi,got_dudt,got_ttherm
  character(len=lentag) :: tag,tagarr(64)
- integer :: k,i,iarr,ik,ndustfraci
+ integer :: k,i,j,iarr,ik,ndustfraci
+ logical :: legacy_nucleation_tag
  real, allocatable :: tmparray(:)
 
  !
@@ -1087,7 +1089,18 @@ subroutine read_phantom_arrays(i1,i2,noffset,narraylengths,nums,npartread,nparto
                 call read_array(apr_level,'apr_level',got_apr_level,ik,i1,i2,noffset,idisk1,tag,match,ierr)
              endif
              if (do_nucleation) then
-                call read_array(nucleation,nucleation_label,got_nucleation,ik,i1,i2,noffset,idisk1,tag,match,ierr)
+                ! legacy dumps used mu, gamma and kappa for nucleation fields;
+                ! these tags collide with the EoS and radiation opacity arrays
+                legacy_nucleation_tag = .false.
+                do j=idmu,idkappa
+                   if (.not.got_nucleation(j) .and. match_tag(tag,nucleation_label_legacy(j))) &
+                      legacy_nucleation_tag = .true.
+                enddo
+                if (legacy_nucleation_tag .and. any(got_nucleation(1:idK3))) then
+                   call read_array(nucleation,nucleation_label_legacy,got_nucleation,ik,i1,i2,noffset,idisk1,tag,match,ierr)
+                else
+                   call read_array(nucleation,nucleation_label,got_nucleation,ik,i1,i2,noffset,idisk1,tag,match,ierr)
+                endif
              endif
              if (itau_alloc == 1) then
                 call read_array(tau,'tau',got_ray_tracer,ik,i1,i2,noffset,idisk1,tag,match,ierr)

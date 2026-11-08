@@ -614,7 +614,7 @@ subroutine test_apr_dust_nuc(ntests,npass)
  use io,           only:id,master
  use, intrinsic :: ieee_arithmetic, only:ieee_is_finite
  integer, intent(inout) :: ntests,npass
- integer, parameter :: ndust_tests = 14
+ integer, parameter :: ndust_tests = 15
  integer :: i,nfailed(ndust_tests),ndust
  real :: moments_in(0:3),moments(0:3),moments_expected(0:3)
  real :: opacity_in,opacity,pmassi,Tchem
@@ -649,6 +649,10 @@ subroutine test_apr_dust_nuc(ntests,npass)
     nucleation(idkappa,i) = calc_kappa_dust(nucleation(idK3,i),dust_temp(i),rho(i)*unit_density)
  enddo
  call get_dust_moment_sums(npart,moments_in)
+ opacity_in = 0.
+ do i=1,npart
+    opacity_in = opacity_in + get_pmass(i,.true.)*nucleation(idkappa,i)
+ enddo
 
  ! reference evolution: each original particle is evolved once,
  ! independent of how many APR children later represent it
@@ -673,6 +677,11 @@ subroutine test_apr_dust_nuc(ntests,npass)
  call checkval(moments(1),moments_in(1),1.e-13,nfailed(2),'dust K1 conserved across split')
  call checkval(moments(2),moments_in(2),1.e-13,nfailed(3),'dust K2 conserved across split')
  call checkval(moments(3),moments_in(3),1.e-13,nfailed(4),'dust K3 conserved across split')
+ opacity = 0.
+ do i=1,npart
+    opacity = opacity + get_pmass(i,.true.)*nucleation(idkappa,i)
+ enddo
+ call checkval(opacity,opacity_in,1.e-13,nfailed(15),'mass-weighted opacity conserved across split')
 
  ! chemistry depends on the normalised moments, not on particle mass:
  ! evolving all split children must reproduce the single-parent reference

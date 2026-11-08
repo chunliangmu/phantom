@@ -17,10 +17,10 @@ module testradiation
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: apr, boundary, deriv, dim, eos, implicit, io, kernel,
-!   mpidomain, mpiutils, neighkdtree, options, part, physcon,
-!   radiation_implicit, radiation_utils, readwrite_dumps, step_lf_global,
-!   testutils, timestep, unifdis, units
+! :Dependencies: allocutils, apr, boundary, deriv, dim, dust_formation,
+!   eos, implicit, io, kernel, mpidomain, mpiutils, neighkdtree, options,
+!   part, physcon, radiation_implicit, radiation_utils, readwrite_dumps,
+!   step_lf_global, testutils, timestep, unifdis, units
 !
  use part,      only:ithick,iradxi,ifluxx,ifluxy,ifluxz,ikappa
  use io,        only:id,master
@@ -54,6 +54,7 @@ subroutine test_radiation(ntests,npass)
  call test_exchange_terms(ntests,npass,use_implicit=.false.)
  if (.not.mpi) call test_exchange_terms(ntests,npass,use_implicit=.true.)
  if (.not.mpi) call test_implicit_corrector(ntests,npass)
+ call test_nucleation_dump_tags(ntests,npass)
  if (use_apr .and. .not.mpi) call test_implicit_growth(ntests,npass)
  ! the exact conservation check requires the symmetric periodic neighbour list
  if (use_apr .and. periodic .and. .not.mpi) call test_implicit_uneven_masses(ntests,npass)
@@ -122,6 +123,33 @@ end subroutine test_implicit_corrector
 
 !----------------------------------------------------
 !+
+!  nucleation and radiation arrays must have distinct
+!  dump tags or one array will mask the other on restart
+!+
+!----------------------------------------------------
+subroutine test_nucleation_dump_tags(ntests,npass)
+ use part, only:n_nucleation,nucleation_label,maxradprop,radprop_label,&
+                maxeosvars,eos_vars_label
+ use dim,  only:nucleation_supported=>nucleation
+ integer, intent(inout) :: ntests,npass
+ integer :: i,nerr(1)
+ logical :: tag_collision
+
+ if (.not.nucleation_supported) return
+
+ tag_collision = .false.
+ do i=1,n_nucleation
+    tag_collision = tag_collision .or. any(nucleation_label(i) == radprop_label(1:maxradprop)) &
+                                  .or. any(nucleation_label(i) == eos_vars_label(1:maxeosvars))
+ enddo
+ nerr = 0
+ call checkval(tag_collision,.false.,nerr(1),'nucleation dump tags are unique')
+ call update_test_scores(ntests,nerr,npass)
+
+end subroutine test_nucleation_dump_tags
+
+!----------------------------------------------------
+!+
 !  check that the implicit solver's working arrays
 !  grow when the particle number grows (APR)
 !+
@@ -172,20 +200,28 @@ end subroutine test_implicit_growth
 !----------------------------------------------------
 subroutine test_implicit_uneven_masses(ntests,npass)
  use part,            only:npart,xyzh,vxyzu,rad,radprop,drad,init_part,igas,iradP,&
-                           get_pmass,apr_level,luminosity,dvdx,fxyzu,init_rho_from_h,rho
+                           get_pmass,apr_level,luminosity,dvdx,fxyzu,init_rho_from_h,rho,&
+                           nucleation,n_nucleation,idK0,idK1,idK2,idK3,idmu,idgamma,idkappa,dust_temp,icv,ikappa
  use radiation_implicit, only:do_radiation_implicit
- use radiation_utils,    only:implicit_radiation,limit_radiation_flux,tol_rad
+ use radiation_utils,    only:implicit_radiation,limit_radiation_flux,tol_rad,cv_type,get_kappa
  use neighkdtree,        only:build_tree
  use boundary,           only:xmin,xmax
  use physcon,            only:pi
  use apr,                only:sync_aprmassoftype
+ use dim,                only:nucleation_supported=>nucleation,do_nucleation,inucleation,&
+                           maxp_nucleation,maxTdust,store_dust_temperature
+ use dust_formation,     only:init_nucleation,calc_kappa_dust,kappa_gas
+ use allocutils,         only:allocate_array
+ use units,              only:unit_density,unit_opacity
+ use eos,                only:get_cv,iopacity_type
  integer, intent(inout) :: ntests,npass
  real    :: kappa_code,c_code,xi0,rho0,pmassi,dt
  real    :: erad0,erad1,egas0,egas1,etot0,etot1,tol
  real    :: pmass_min,pmass_max,tol_rad_old,radp_err,local_rad_change,local_gas_change
- real, allocatable :: xi_old(:),u_old(:)
- integer :: i,ierr,nerr(6)
- logical :: limit_flux_old,implicit_old
+ real    :: cv_err,kappa_err,cv_expected,kappa_expected,moments_err
+ real, allocatable :: xi_old(:),u_old(:),moments_before(:,:)
+ integer :: i,ierr,nerr(9),cv_type_old,inucleation_old
+ logical :: limit_flux_old,implicit_old,dust_test,do_nucleation_old,store_dust_temperature_old
 
  if (id==master) write(*,"(/,a)") '--> checking implicit radiation with uneven APR masses'
 
@@ -199,6 +235,45 @@ subroutine test_implicit_uneven_masses(ntests,npass)
  call sync_aprmassoftype()
  call init_rho_from_h()
 
+ ! where available, also exercise carbon-dust opacity and the evolving
+ ! chemical composition in the implicit solve
+ dust_test = nucleation_supported
+ do_nucleation_old = do_nucleation
+ inucleation_old = inucleation
+ store_dust_temperature_old = store_dust_temperature
+ if (dust_test) then
+    if (allocated(nucleation)) then
+       if (size(nucleation,2) < npart) deallocate(nucleation)
+    endif
+    if (.not.allocated(nucleation)) then
+       maxp_nucleation = npart
+       call allocate_array('nucleation',nucleation,n_nucleation,maxp_nucleation)
+    endif
+    if (allocated(dust_temp)) then
+       if (size(dust_temp) < npart) deallocate(dust_temp)
+    endif
+    if (.not.allocated(dust_temp)) then
+       maxTdust = npart
+       call allocate_array('dust_temp',dust_temp,maxTdust)
+    endif
+    inucleation = 1
+    do_nucleation = .true.
+    store_dust_temperature = .true.
+    call init_nucleation()
+    allocate(moments_before(4,npart))
+    do i=1,npart
+       nucleation(idK0,i) = 1.e-8*(1. + mod(i,5))
+       nucleation(idK1,i) = 10.*nucleation(idK0,i)*(1. + 0.1*mod(i,3))
+       nucleation(idK2,i) = 100.*nucleation(idK0,i)*(1. + 0.2*mod(i,7))
+       nucleation(idK3,i) = 1.e-5*(1. + mod(i,11))
+       nucleation(idmu,i) = nucleation(idmu,i)*(1. + 0.01*mod(i,5))
+       nucleation(idgamma,i) = nucleation(idgamma,i)*(1. + 0.01*mod(i,3))
+       dust_temp(i) = 500. + 10.*mod(i,17)
+       nucleation(idkappa,i) = calc_kappa_dust(nucleation(idK3,i),dust_temp(i),rho(i)*unit_density)
+       moments_before(:,i) = nucleation(idK0:idK3,i)
+    enddo
+ endif
+
  ! set a smooth radiation energy density on the (now non-uniform) mass distribution
  do i=1,npart
     rad(iradxi,i) = xi0*rho0*(1. + 0.1*sin(xyzh(1,i)*2.*pi/(xmax-xmin)))/rho(i)
@@ -207,9 +282,11 @@ subroutine test_implicit_uneven_masses(ntests,npass)
  implicit_old = implicit_radiation
  limit_flux_old = limit_radiation_flux
  tol_rad_old = tol_rad
+ cv_type_old = cv_type
  implicit_radiation = .true.
  limit_radiation_flux = .false.
- tol_rad = 1.e-9
+ tol_rad = 1.e-8
+ cv_type = 0
  dt = 6.7e-24  ! same finite implicit step used by the sinusoidal diffusion test
  luminosity(:) = 0.
  fxyzu(4,:)   = 0.
@@ -238,20 +315,33 @@ subroutine test_implicit_uneven_masses(ntests,npass)
  erad1 = 0.
  egas1 = 0.
  radp_err = 0.
+ cv_err = 0.
+ kappa_err = 0.
  do i=1,npart
     pmassi = get_pmass(i,.true.)
     erad1 = erad1 + pmassi*rad(iradxi,i)
     egas1 = egas1 + pmassi*vxyzu(4,i)
     radp_err = max(radp_err,abs(radprop(iradP,i)-(1./3.)*rad(iradxi,i)*rho(i))/&
                    max(abs(radprop(iradP,i)),tiny(radp_err)))
+    if (dust_test) then
+       cv_expected = get_cv(cv_type,rho(i),vxyzu(4,i),mu_local=nucleation(idmu,i),&
+                          gamma_local=nucleation(idgamma,i))
+       kappa_expected = get_kappa(iopacity_type,vxyzu(4,i),cv_expected,rho(i))&
+                      + (nucleation(idkappa,i)-kappa_gas)/unit_opacity
+       cv_err = max(cv_err,abs(radprop(icv,i)-cv_expected)/abs(cv_expected))
+       kappa_err = max(kappa_err,abs(radprop(ikappa,i)-kappa_expected)/abs(kappa_expected))
+    endif
  enddo
  etot1 = erad1 + egas1
  local_rad_change = maxval(abs(rad(iradxi,1:npart)-xi_old))/maxval(abs(xi_old))
  local_gas_change = maxval(abs(vxyzu(4,1:npart)-u_old))/maxval(abs(u_old))
+ moments_err = 0.
+ if (dust_test) moments_err = maxval(abs(nucleation(idK0:idK3,1:npart)-moments_before))
  deallocate(xi_old,u_old)
  implicit_radiation = implicit_old
  limit_radiation_flux = limit_flux_old
  tol_rad = tol_rad_old
+ cv_type = cv_type_old
 
  nerr = 0
  tol = 1.e-8
@@ -261,7 +351,16 @@ subroutine test_implicit_uneven_masses(ntests,npass)
  call checkval(ierr,0,0,nerr(4),'implicit solver with uneven masses')
  call checkval((etot1-etot0)/abs(etot0),0.,tol,nerr(5),'total gas+radiation energy (APR masses)')
  call checkval(radp_err,0.,2.e-15,nerr(6),'radiation pressure consistent with updated xi')
+ if (dust_test) then
+    call checkval(cv_err,0.,2.e-15,nerr(7),'cv consistent with dust chemical composition')
+    call checkval(kappa_err,0.,2.e-15,nerr(8),'combined gas+dust opacity used by implicit FLD')
+    call checkval(moments_err,0.,0.,nerr(9),'dust moments unchanged by implicit FLD')
+    deallocate(moments_before)
+ endif
  call update_test_scores(ntests,nerr,npass)
+ do_nucleation = do_nucleation_old
+ inucleation = inucleation_old
+ store_dust_temperature = store_dust_temperature_old
 
 end subroutine test_implicit_uneven_masses
 

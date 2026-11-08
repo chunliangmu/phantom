@@ -531,6 +531,9 @@ endif
 OBJECTS1 = $(SOURCES:.f90=.o)
 OBJECTS = $(OBJECTS1:.F90=.o)
 
+# radiation_utils uses the kappa_gas runtime option from dust_formation
+radiation_utils.o: dust_formation.o
+
 ifeq ($(KROME), yes)
     .PHONY: all
 

@@ -40,7 +40,7 @@ module dust_formation
 !--runtime settings for this module
 !
 
- real, public :: kappa_gas   = 2.d-4
+ real, public :: kappa_gas = 2.d-4
  real, public, parameter :: Scrit = 2. ! Critical saturation ratio
  real, public :: mass_per_H, eps(nElements)
  real, public :: Aw(nElements) = [1.0079, 4.0026, 12.011, 15.9994, 14.0067, 20.17, 28.0855, 32.06, 55.847, 47.867]
@@ -103,6 +103,7 @@ subroutine init_nucleation
  JKmuS = 0.
  JKmuS(idmu)    = gmw
  JKmuS(idgamma) = gamma
+ JKmuS(idkappa) = kappa_gas  ! no dust extinction initially; keep FLD gas+dust sum non-negative
  do i=1,npart
     nucleation(:,i) = JKmuS(:)
  enddo

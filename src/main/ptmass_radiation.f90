@@ -258,7 +258,7 @@ end subroutine get_radiative_acceleration_from_star
 !+
 !-----------------------------------------------------------------------
 subroutine get_dust_temperature(npart,xyzh,eos_vars,nptmass,xyzmh_ptmass,dust_temp)
- use part,      only:tau,tau_lucy,ikappa,nucleation,rho
+ use part,      only:tau,tau_lucy,idkappa,nucleation,rho
  use raytracer, only:get_all_tau
  use dust_formation, only:calc_kappa_bowen,idust_opacity
  use dim,       only:itau_alloc
@@ -285,7 +285,7 @@ subroutine get_dust_temperature(npart,xyzh,eos_vars,nptmass,xyzmh_ptmass,dust_te
  if (iget_tdust == 4) then
     ! update tau_Lucy
     if (idust_opacity == 2) then
-       call get_all_tau(npart, nptmass, xyzmh_ptmass, xyzh, rho, nucleation(:,ikappa),&
+       call get_all_tau(npart, nptmass, xyzmh_ptmass, xyzh, rho, nucleation(idkappa,:),&
                          iray_resolution, .false., tau_lucy)
     else
        call get_all_tau(npart, nptmass, xyzmh_ptmass, xyzh, rho, calc_kappa_bowen(dust_temp(1:npart)),&
@@ -294,7 +294,7 @@ subroutine get_dust_temperature(npart,xyzh,eos_vars,nptmass,xyzmh_ptmass,dust_te
  elseif (itau_alloc == 1) then
     ! update tau
     if (idust_opacity == 2) then
-       call get_all_tau(npart, nptmass, xyzmh_ptmass, xyzh, rho, nucleation(:,ikappa),&
+       call get_all_tau(npart, nptmass, xyzmh_ptmass, xyzh, rho, nucleation(idkappa,:),&
                          iray_resolution, .true., tau)
     else
        call get_all_tau(npart, nptmass, xyzmh_ptmass, xyzh, rho, calc_kappa_bowen(dust_temp(1:npart)),&
@@ -360,24 +360,32 @@ subroutine get_dust_temperature_from_ptmass(npart,xyzh,eos_vars,nptmass,xyzmh_pt
  case(2)
     ! Flux dilution without attenuation
     !$omp parallel  do default(none) &
-    !$omp shared(npart,xa,ya,za,R_star,T_star,xyzh,dust_temp,tdust_exp) &
+    !$omp shared(npart,xa,ya,za,R_star,T_star,xyzh,dust_temp,tdust_exp,eos_vars) &
     !$omp private(i,r)
     do i=1,npart
        if (.not.isdead_or_accreted(xyzh(4,i))) then
           r = sqrt((xyzh(1,i)-xa)**2 + (xyzh(2,i)-ya)**2 + (xyzh(3,i)-za)**2)
-          if (r > R_star) dust_temp(i) = T_star * (.5*(1.-sqrt(1.-(R_star/r)**2)))**(1./4.)
+          if (r > R_star) then
+             dust_temp(i) = T_star * (.5*(1.-sqrt(1.-(R_star/r)**2)))**(1./4.)
+          else
+             dust_temp(i) = eos_vars(itemp,i)
+          endif
        endif
     enddo
     !$omp end parallel do
  case(3)
     ! Flux dilution with attenuation (exp(-tau))
     !$omp parallel  do default(none) &
-    !$omp shared(npart,xa,ya,za,R_star,T_star,xyzh,dust_temp,tdust_exp,tau) &
+    !$omp shared(npart,xa,ya,za,R_star,T_star,xyzh,dust_temp,tdust_exp,tau,eos_vars) &
     !$omp private(i,r)
     do i=1,npart
        if (.not.isdead_or_accreted(xyzh(4,i))) then
           r = sqrt((xyzh(1,i)-xa)**2 + (xyzh(2,i)-ya)**2 + (xyzh(3,i)-za)**2)
-          if (r > R_star) dust_temp(i) = T_star * (.5*(1.-sqrt(1.-(R_star/r)**2))*exp(-tau(i)))**(1./4.)
+          if (r > R_star) then
+             dust_temp(i) = T_star * (.5*(1.-sqrt(1.-(R_star/r)**2))*exp(-tau(i)))**(1./4.)
+          else
+             dust_temp(i) = eos_vars(itemp,i)
+          endif
        endif
     enddo
     !$omp end parallel do

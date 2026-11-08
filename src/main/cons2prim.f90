@@ -255,7 +255,7 @@ subroutine cons2prim_everything(npart,xyzh,vxyzu,dvdx,rad,eos_vars,radprop,&
                              ndustsmall,itemp,ikappa,idmu,idgamma,icv
  use part,              only:nucleation,igamma
  use eos,               only:equationofstate,ieos,eos_outputs_mu,done_init_eos,init_eos,gmw,X_in,Z_in,gamma
- use radiation_utils,   only:radiation_equation_of_state,get_opacity
+ use radiation_utils,   only:radiation_equation_of_state,get_kappa_with_dust
  use dim,               only:mhd,maxvxyzu,maxphase,maxp,use_dustgrowth,&
                              do_radiation,nalpha,mhd_nonideal,do_nucleation,use_krome,update_muGamma
  use nicil,             only:nicil_update_nimhd,nicil_translate_error,n_warn
@@ -374,7 +374,7 @@ subroutine cons2prim_everything(npart,xyzh,vxyzu,dvdx,rad,eos_vars,radprop,&
              !
              ! Get the opacity from the density and temperature if required
              !
-             if (iopacity_type > 0) call get_opacity(iopacity_type,rhogas,temperaturei,radprop(ikappa,i))
+             if (iopacity_type > 0) radprop(ikappa,i) = get_kappa_with_dust(i,iopacity_type,vxyzu(4,i),radprop(icv,i),rhogas)
           endif
           !
           ! Get radiation pressure from the radiation energy, i.e. P = 1/3 E if optically thick

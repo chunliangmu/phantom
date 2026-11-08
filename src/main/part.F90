@@ -275,6 +275,10 @@ module part
  real, allocatable :: nucleation(:,:)
  ! please note that in nucleation, we save the *normalized* moments, i.e. \hat{K}_i = K_i/n<H>
  character(len=*), parameter :: nucleation_label(n_nucleation) = &
+       (/'Jstar  ','K0     ','K1     ','K2     ','K3     ',&
+         'mu_nuc ','gam_nuc','S      ','kappad ','alphw  '/)
+ ! older dumps used 'kappa', which clashes with the radiation-opacity tag
+ character(len=*), parameter :: nucleation_label_legacy(n_nucleation) = &
        (/'Jstar','K0   ','K1   ','K2   ','K3   ',&
          'mu   ','gamma','S    ','kappa','alphw'/)
  integer, parameter :: idJstar = 1, &

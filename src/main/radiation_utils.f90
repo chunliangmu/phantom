@@ -23,8 +23,8 @@ module radiation_utils
 !   - kappa_cgs          : *constant opacity value in cm2/g*
 !   - tol_rad            : *tolerance on backwards Euler implicit solve of dxi/dt*
 !
-! :Dependencies: dim, eos, infile_utils, io, mesa_microphysics, part,
-!   physcon, units
+! :Dependencies: dim, dust_formation, eos, infile_utils, io,
+!   mesa_microphysics, part, physcon, units
 !
  implicit none
  public :: update_radenergy!,set_radfluxesandregions
@@ -38,6 +38,7 @@ module radiation_utils
  public :: Tgas_from_ugas
  public :: get_opacity
  public :: get_kappa
+ public :: get_kappa_with_dust
 
  ! options for the input file, with default values
  real, public       :: tol_rad = 1.e-6
@@ -111,7 +112,7 @@ subroutine write_options_radiation(iunit)
  if (implicit_radiation) then
     call write_inopt(tol_rad,'tol_rad','tolerance on backwards Euler implicit solve of dxi/dt',iunit)
     call write_inopt(itsmax_rad,'itsmax_rad','max number of iterations for radiation implicit solve',iunit)
-    call write_inopt(cv_type,'cv_type','how to get cv and mean mol weight (0=constant,1=mesa)',iunit)
+    call write_inopt(cv_type,'cv_type','how to get cv and mean mol weight (0=constant,1=mesa,20=gas+rad+recombination)',iunit)
  endif
 
 end subroutine write_options_radiation
@@ -122,9 +123,9 @@ end subroutine write_options_radiation
 !+
 !---------------------------------------------------------
 subroutine read_options_radiation(db,nerr)
- use eos,          only:iopacity_type
+ use eos,          only:iopacity_type,ieos
  use infile_utils, only:inopts,read_inopt
- use dim,          only:mpi
+ use dim,          only:mpi,do_nucleation
  use io,           only:error
  type(inopts), intent(inout) :: db(:)
  integer,      intent(inout) :: nerr
@@ -142,6 +143,14 @@ subroutine read_options_radiation(db,nerr)
     call read_inopt(cv_type,'cv_type',db,errcount=nerr,min=0,max=20,default=cv_type)
     call read_inopt(tol_rad,'tol_rad',db,errcount=nerr,min=epsilon(tol_rad),default=tol_rad)
     call read_inopt(itsmax_rad,'itsmax_rad',db,errcount=nerr,min=1,default=itsmax_rad)
+    if (ieos == 20 .and. cv_type /= 20) then
+       call error('read_options','ieos=20 with implicit radiation requires cv_type=20')
+       nerr = nerr + 1
+    endif
+ endif
+ if (implicit_radiation .and. do_nucleation) then
+    write(*,"(/,1x,a,/,1x,a,/)") 'Carbon dust is included in the grey FLD opacity',&
+                                 'Gas and dust are assumed to be in thermal equilibrium for the radiation exchange'
  endif
 
 end subroutine read_options_radiation
@@ -471,6 +480,32 @@ real function get_kappa(opacity_type,u,cv,rho) result(kappa)
  call get_opacity(opacity_type,rho,temp,kappa)
 
 end function get_kappa
+
+!--------------------------------------------------------------------
+!+
+!  get combined gas and carbon-dust opacity in code units.
+!
+!  calc_kappa_dust includes the constant kappa_gas contribution, so
+!  subtract it before adding the dust extinction to the gas opacity.
+!  The grey FLD model uses this total opacity for both diffusion and
+!  matter--radiation exchange, i.e. it assumes gas--dust thermal
+!  equilibrium for the energy exchange.  dust_temp is used only to
+!  evaluate the Rosseland dust opacity; there is no independent dust
+!  energy reservoir in this approximation.
+!+
+!--------------------------------------------------------------------
+real function get_kappa_with_dust(i,opacity_type,u,cv,rho) result(kappa)
+ use dim,           only:do_nucleation
+ use part,          only:nucleation,idkappa
+ use dust_formation,only:kappa_gas
+ use units,         only:unit_opacity
+ integer, intent(in) :: i,opacity_type
+ real,    intent(in) :: u,cv,rho
+
+ kappa = get_kappa(opacity_type,u,cv,rho)
+ if (do_nucleation) kappa = kappa + (nucleation(idkappa,i) - kappa_gas)/unit_opacity
+
+end function get_kappa_with_dust
 
 !--------------------------------------------------------------------
 !+
