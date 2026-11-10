@@ -41,26 +41,22 @@ module forces
 !
 ! :Dependencies: boundary, cooling, derivutils, dim, dust, eos, eos_shen,
 !   eos_stamatellos, growth, io, io_summary, kdtree, kernel, metric_tools,
-!   mpiderivs, mpiforce, mpimemory, mpiutils, neighkdtree, nicil, omputils,
-!   options, part, physcon, ptmass, ptmass_heating, radiation_utils,
+!   mpiderivs, mpiforce, mpikdtree, mpimemory, mpiutils, neighkdtree,
+!   nicil, options, part, physcon, ptmass, ptmass_heating, radiation_utils,
 !   shock_capturing, timestep, timestep_ind, timing, units, utils_gr,
 !   viscosity
 !
  use dim, only:maxfsum,maxxpartveciforce,maxp,ndivcurlB,&
                maxdusttypes,maxdustsmall,do_radiation,maxpsph
- use mpiforce,    only:cellforce,stackforce
+ use mpiforce,    only:cellforce,stackforce,maxcellleaves,ifonrmaxi
  use neighkdtree, only:leaf_is_active
- use kdtree,      only:inodeparts,inoderange,ih1,im,irho,izetaomega,isoftomega
+ use kdtree,      only:inodeparts,inoderange,ih1,im
  use part,        only:iradxi,ifluxx,ifluxy,ifluxz,ikappa,ien_type,ien_entropy,ien_entropy_s
 
  implicit none
 
  integer, parameter :: maxcellcache = 1000
-#ifdef GRAVITY
- integer, parameter :: nforcecache = 8
-#else
- integer, parameter :: nforcecache = 7
-#endif
+ integer, parameter :: nforcecache = 5  ! position, 1/h and mass of the trial neighbours
 
  public :: force, reconstruct_dv, get_drag_terms ! latter to avoid compiler warning
 
@@ -160,7 +156,6 @@ module forces
        ifskxi         = 13, &
        ifskyi         = 14, &
        ifskzi         = 15, &
-       ifonrmaxi      = 16, &
        ipertouti      = 17, &
  !--dust array indexing
        ifdragxi       = 18, &
@@ -184,7 +179,11 @@ module forces
        idviz          = 31 + 5*(maxdustsmall-1), &
        idensgasi      = 32 + 5*(maxdustsmall-1), &
        icsi           = 33 + 5*(maxdustsmall-1), &
-       idradi         = 34 + 5*(maxdustsmall-1)
+       idradi         = 34 + 5*(maxdustsmall-1), &
+ !--pressure gradient for the radiative cooling approximation (icooling=9)
+       igradpxi       = 35 + 5*(maxdustsmall-1), &
+       igradpyi       = 36 + 5*(maxdustsmall-1), &
+       igradpzi       = 37 + 5*(maxdustsmall-1)
 
  private
 
@@ -200,10 +199,12 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
                  dustfrac,ddustevol,fext,fxyz_drag,&
                  ipart_rhomax,dt,stressmax,eos_vars,dens,metrics,apr_level)
 
- use dim,          only:maxvxyzu,mhd,mhd_nonideal,mpi,use_dust,use_apr,use_sinktree
+ use dim,          only:maxvxyzu,mhd,mhd_nonideal,mpi,use_dust,use_apr,use_sinktree,gravity,minpart
  use io,           only:iprint,fatal,iverbose,id,master,real4,warning,error,nprocs
  use neighkdtree,  only:get_neighbour_list,get_hmaxcell,get_cell_location,listneigh,&
-                        active_leaves,nactive_leaves
+                        active_leaves,nactive_leaves,ncellchunk,get_leaf_neighbours,&
+                        reset_dual_cache
+ use mpikdtree,    only:extend_local_tree
  use part,         only:alphaind,iactive,gradh,&
                         iphase,igas,maxgradh,dvdx,eta_nimhd,deltav,poten,iamtype,&
                         dragreg,filfac,fxyz_dragold,nptmass,shortsinktree,&
@@ -233,13 +234,16 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 #endif
  use dust,         only:drag_implicit
  use nicil,        only:nimhd_get_jcbcb
- use mpiderivs,    only:send_cell,recv_cells,init_cell_exchange,&
+ use mpiderivs,    only:send_cell,recv_cells,init_cell_exchange,record_send_wait,&
                         finish_cell_exchange,recv_while_wait,reset_cell_counters,cell_counters
  use mpimemory,    only:reserve_stack,reset_stacks,get_cell,write_cell
  use mpimemory,    only:stack_remote  => force_stack_1
+ use mpimemory,    only:force_pool,get_packed_cell,clear_pool
  use mpimemory,    only:stack_waiting => force_stack_2
  use io_summary,   only:iosumdtr
- use timing,       only:increment_timer,get_timings,itimer_force_local,itimer_force_remote
+ use timing,       only:increment_timer,get_timings,itimer_force_local,itimer_force_remote,itimer_force_let,&
+                        itimer_force_lcomp,itimer_force_rcomp,&
+                        itimer_force_lsend,itimer_force_rsend
  use eos,          only:iresistive_heating
 
  integer,         intent(in)    :: icall,npart
@@ -282,9 +286,10 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 #endif
  logical :: realviscosity,useresistiveheat
 #ifndef IND_TIMESTEPS
- real    :: dtmaxi,minglobdt
+ real    :: dtmaxi,minglobdt,dtred(9)
 #else
  integer :: nbinmaxnew,ncheckbin
+ integer(kind=8) :: ndtsum(8)
  integer :: ndtforce,ndtforceng,ndtcool,ndtdrag,ndtdragd
  integer :: ndtvisc,ndtohm,ndthall,ndtambi,ndtdust,ndtrad,ndtclean
  real    :: dtitmp,dtrat,dtmaxi
@@ -296,9 +301,13 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  integer(kind=1)           :: ibinnow_m1
 
  type(cellforce)           :: cell
+ integer                   :: leaves(maxcellleaves),nleaves ! leaves of this task sent with a remote cell
  logical                   :: remote_export(nprocs),do_export
+ logical                   :: ptargets(minpart,nprocs) ! tasks each particle of a cell is sent to
+ logical                   :: exchange ! whether cells are exchanged with other MPI tasks
 
  real(kind=4)              :: t1,t2,tcpu1,tcpu2
+ real(kind=4)              :: tc1,tcpuc1,tc2,tcpuc2 ! start and end of the compute loops
 
 #ifdef IND_TIMESTEPS
  nbinmaxnew      = 0
@@ -386,6 +395,10 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
        fxyz_ptmass_tree(:,i) = 0.
     enddo
     !$omp end parallel do
+
+    ! the potential of a sink is set only by the task whose tree holds it, and
+    ! summed over all tasks: clear any value left from when another task held it
+    poten(maxpsph+1:maxpsph+nptmass) = 0.
  endif
 
  ! sink particle creation
@@ -395,9 +408,21 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  rhomax        = 0.
 #endif
 
- if (mpi) then
+ !--the cell exchange is only needed with more than one MPI task
+ exchange = mpi .and. nprocs > 1
+ if (exchange) then
     call reset_stacks
     call reset_cell_counters(cell_counters)
+ endif
+
+ !--import the nodes of other tasks that the dual tree walk could open(the
+ !  locally essential tree), and check that the walk never meets a truncated node
+ if (exchange .and. gravity) then
+    call get_timings(t1,tcpu1)
+    call extend_local_tree(1)
+    call reset_dual_cache()
+    call get_timings(t2,tcpu2)
+    call increment_timer(itimer_force_let,t2-t1,tcpu2-tcpu1)
  endif
 
 !
@@ -440,8 +465,8 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 !$omp shared(nprocs,icall) &
 !$omp shared(poten) &
 !$omp private(icell,i,ia) &
-!$omp private(cell) &
-!$omp private(remote_export) &
+!$omp private(cell,leaves,nleaves) &
+!$omp private(remote_export,ptargets) &
 !$omp private(nneigh) &
 !$omp shared(dens) &
 !$omp shared(metrics) &
@@ -457,8 +482,8 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 #endif
 !$omp shared(id) &
 !$omp private(do_export) &
-!$omp shared(cell_counters) &
-!$omp shared(stack_remote) &
+!$omp shared(cell_counters,exchange) &
+!$omp shared(stack_remote,force_pool) &
 !$omp shared(stack_waiting) &
 #ifdef IND_TIMESTEPS
 !$omp shared(nbinmax) &
@@ -484,16 +509,16 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 !$omp shared(t1) &
 !$omp shared(t2) &
 !$omp shared(tcpu1) &
-!$omp shared(tcpu2)
+!$omp shared(tcpu2) &
+!$omp shared(tc1,tcpuc1,tc2,tcpuc2)
 
- call init_cell_exchange(stack_remote)
+ if (exchange) call init_cell_exchange(stack_remote)
 
  !$omp single
  call get_timings(t1,tcpu1)
  !$omp end single
 
-
- !$omp do schedule(runtime)
+ !$omp do schedule(dynamic,ncellchunk)
  over_cells: do ia=1,nactive_leaves
     icell = active_leaves(ia)
 
@@ -516,11 +541,23 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
     cell%owner = id
     do_export = any(remote_export)
 
-    if (mpi) then
+    !--without self-gravity, send each task only the particles that interact with its
+    !  particles (with self-gravity, the leaves the dual tree walk paired with the cell)
+    if (do_export .and. .not.gravity) then
+       call particle_targets(cell,remote_export,ptargets)
+       do_export = any(remote_export)
+    endif
+
+    if (exchange) then
        call recv_cells(stack_remote,cell_counters)
        if (do_export) then
           call reserve_stack(stack_waiting,cell%waiting_index)
-          call send_cell(cell,remote_export,stack_remote,cell_counters)  ! send to remote
+          if (gravity) then
+             ! to each task, with its leaves that the dual tree walk paired with the cell
+             call send_cell_with_leaves(cell,stack_remote,cell_counters)
+          else
+             call send_cell(cell,remote_export,stack_remote,cell_counters,ptargets)
+          endif
        endif
     endif
 
@@ -553,9 +590,15 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 
  enddo over_cells
  !$omp enddo
+ !$omp single
+ call get_timings(tc2,tcpuc2)
+ if (exchange) then
+    call increment_timer(itimer_force_lcomp,tc2-t1,tcpuc2-tcpu1)
+    call record_send_wait(itimer_force_lsend)
+ endif
+ !$omp end single
 
-
- if (mpi) then
+ if (exchange) then
     call recv_while_wait(stack_remote,cell_counters)
     call reset_cell_counters(cell_counters)
  endif
@@ -567,14 +610,24 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  !$omp end single
  !$omp barrier
 
- igot_remote: if (mpi .and. stack_remote%n > 0) then
-    !$omp do schedule(runtime)
-    over_remote: do i = 1,stack_remote%n
-       cell = get_cell(stack_remote,i)
+ igot_remote: if (exchange .and. force_pool%n > 0) then
+    !$omp single
+    call get_timings(tc1,tcpuc1)
+    !$omp end single
+    !$omp do schedule(dynamic,ncellchunk)
+    over_remote: do i = 1,force_pool%n
+       call get_packed_cell(force_pool,i,cell,leaves,nleaves)
 
-       call get_neighbour_list(-1,listneigh,nneigh,xyzh,xyzcache,maxcellcache, &
-                               getj=.true.,f=cell%fgrav,&
-                               cell_xpos=cell%xpos,cell_xsizei=cell%xsizei,cell_rcuti=cell%rcuti)
+       if (nleaves > 0) then
+          ! the trial neighbours are the particles of the leaves the owner's dual
+          ! tree walk paired with the cell; its long-range gravity is the owner's
+          call get_leaf_neighbours(cell%xpos,leaves,nleaves,listneigh,nneigh,xyzcache,maxcellcache)
+          cell%fgrav = 0.
+       else
+          call get_neighbour_list(-1,listneigh,nneigh,xyzh,xyzcache,maxcellcache, &
+                                  getj=.true.,f=cell%fgrav,&
+                                  cell_xpos=cell%xpos,cell_xsizei=cell%xsizei,cell_rcuti=cell%rcuti)
+       endif
 
        call compute_cell(cell,listneigh,nneigh,Bevol,xyzh,vxyzu,fxyzu, &
                          iphase,divcurlv,divcurlB,alphaind,eta_nimhd,eos_vars, &
@@ -584,23 +637,26 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
        remote_export = .false.
        remote_export(cell%owner+1) = .true. ! use remote_export array to send back to the owner
 
-
        call send_cell(cell,remote_export,stack_waiting,cell_counters) ! send the cell back to owner
 
     enddo over_remote
     !$omp enddo
-
     !$omp single
-    stack_remote%n = 0
+    call get_timings(tc2,tcpuc2)
+    call increment_timer(itimer_force_rcomp,tc2-tc1,tcpuc2-tcpuc1)
+    call record_send_wait(itimer_force_rsend)
     !$omp end single
 
+    !$omp single
+    call clear_pool(force_pool,release=.false.)
+    !$omp end single
 
  endif igot_remote
 
- if (mpi) call recv_while_wait(stack_waiting,cell_counters)
+ if (exchange) call recv_while_wait(stack_waiting,cell_counters)
 
- iam_waiting: if (mpi .and. stack_waiting%n > 0) then
-    !$omp do schedule(runtime)
+ iam_waiting: if (exchange .and. stack_waiting%n > 0) then
+    !$omp do schedule(dynamic,ncellchunk)
     over_waiting: do i = 1, stack_waiting%n
        cell = get_cell(stack_waiting,i)
 
@@ -630,8 +686,7 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 
  endif iam_waiting
 
- call finish_cell_exchange(stack_remote)
-
+ if (exchange) call finish_cell_exchange(stack_remote)
 
 !$omp single
  call get_timings(t2,tcpu2)
@@ -642,7 +697,7 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  if (icreate_sinks > 0) then
     rhomax_thread = 0.
     ipart_rhomax_thread = 0
-    !$omp do schedule(runtime)
+    !$omp do
     over_parts: do i=1,npart
        hi = xyzh(4,i)
 #ifdef IND_TIMESTEPS
@@ -705,23 +760,12 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
     if (use_sinktree) then
        fxyz_ptmass_tree   = reduceall_mpi('+',fxyz_ptmass_tree)
        bin_info(ipertg,:) = reduceall_mpi('+',bin_info(ipertg,:))
-       do i=1,nptmass
-          shortsinktree(1:nptmass,i) = reduceall_mpi("max", shortsinktree(1:nptmass,i))
-       enddo
+
+       ! one reduction for all sink pairs, rather than one per sink
+       shortsinktree(1:nptmass,1:nptmass) = reshape(reduceall_mpi('max',&
+          reshape(shortsinktree(1:nptmass,1:nptmass),[nptmass*nptmass])),[nptmass,nptmass])
     endif
  endif
-
-#ifdef IND_TIMESTEPS
- ! check for nbinmaxnew = 0, can happen if all particles
- ! are dead/inactive, e.g. after sink creation or if all
- ! have moved to a higher ibin; the following step on the
- ! higher ibin will yeild non-zero and modify nbinmax
- ! appropriately. With MPI this must be a global check, otherwise
- ! a task with no active particles would stop nbinmax decreasing
- if (reduceall_mpi('+',ncheckbin)==0) then
-    nbinmaxnew    = nbinmax
- endif
-#endif
 
 #ifdef GRAVITY
  if (reduceall_mpi('max',ipart_rhomax) > 0) then
@@ -756,15 +800,26 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
 #endif
 
 #ifdef IND_TIMESTEPS
- nbinmax    = int(reduceall_mpi('max',nbinmaxnew),kind=1)
- ndtforce   = int(reduce_mpi('+',ndtforce))
- ndtforceng = int(reduce_mpi('+',ndtforceng))
- ndtcool    = int(reduce_mpi('+',ndtcool))
- ndtdrag    = int(reduce_mpi('+',ndtdrag))
- ndtdragd   = int(reduce_mpi('+',ndtdragd))
- ndtdust    = int(reduce_mpi('+',ndtdust))
- ndtrad     = int(reduce_mpi('+',ndtrad))
- ndtclean   = int(reduce_mpi('+',ndtclean))
+ ! check for nbinmaxnew = 0, can happen if all particles
+ ! are dead/inactive, e.g. after sink creation or if all
+ ! have moved to a higher ibin; the following step on the
+ ! higher ibin will yeild non-zero and modify nbinmax
+ ! appropriately. With MPI this must be a global check, otherwise
+ ! a task with no active particles would stop nbinmax decreasing:
+ ! such a task offers -1, so nbinmax is kept only if no task set a bin
+ if (ncheckbin == 0) nbinmaxnew = -1
+ nbinmaxnew = int(reduceall_mpi('max',nbinmaxnew))
+ if (nbinmaxnew >= 0) nbinmax = int(nbinmaxnew,kind=1)
+ ! the particles each constraint set the timestep of, summed over tasks in one reduction
+ ndtsum = reduce_mpi('+',[ndtforce,ndtforceng,ndtcool,ndtdrag,ndtdragd,ndtdust,ndtrad,ndtclean])
+ ndtforce   = int(ndtsum(1))
+ ndtforceng = int(ndtsum(2))
+ ndtcool    = int(ndtsum(3))
+ ndtdrag    = int(ndtsum(4))
+ ndtdragd   = int(ndtsum(5))
+ ndtdust    = int(ndtsum(6))
+ ndtrad     = int(ndtsum(7))
+ ndtclean   = int(ndtsum(8))
 
  !  Print warning statements, if required
  if (iverbose >= 1 .and. id==master) then
@@ -812,20 +867,22 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  if (ndtclean   > 0)  call summary_variable('dt',iosumdtB  ,ndtclean  ,dtcleanfacmean/real(ndtclean)  ,dtcleanfacmax)
 #else
 
- dtcourant = reduceall_mpi('min',dtcourant)
- dtforce   = reduceall_mpi('min',dtforce)
- dtvisc    = reduceall_mpi('min',dtvisc)
- dtmini    = reduce_mpi('min',dtmini)
- dtmaxi    = reduce_mpi('max',dtmaxi)
+ ! the timestep constraints over all tasks, in one reduction (the largest as minus the smallest)
+ dtred = reduceall_mpi('min',[dtcourant,dtforce,dtvisc,dtmini,-dtmaxi,dtohm,dthall,dtambi,dtrad])
+ dtcourant = dtred(1)
+ dtforce   = dtred(2)
+ dtvisc    = dtred(3)
+ dtmini    = dtred(4)
+ dtmaxi    = -dtred(5)
 
  if (iverbose >= 2 .and. id==master) write(iprint,*) 'dtmin = ',C_Cour*dtmini, ' dtmax = ',C_cour*dtmaxi, &
     ' dtmax/dtmin = ',dtmaxi/(dtmini + epsilon(0.)),'dtcour/dtf = ',(C_cour*dtcourant)/(C_force*dtforce + epsilon(0.))
  if ( dtforce < dtcourant ) call summary_variable('dt',iosumdtf,0,0.0)
  if ( dtvisc  < dtcourant ) call summary_variable('dt',iosumdtv,0,0.0)
  if ( mhd_nonideal ) then
-    dtohm    = reduceall_mpi('min',dtohm )
-    dthall   = reduceall_mpi('min',dthall)
-    dtambi   = reduceall_mpi('min',dtambi)
+    dtohm    = dtred(6)
+    dthall   = dtred(7)
+    dtambi   = dtred(8)
     if ( dthall < dtcourant ) call summary_variable('dt',iosumdth,0,0.0)
     if ( dtohm  < dtcourant ) call summary_variable('dt',iosumdto,0,0.0)
     if ( dtambi < dtcourant ) call summary_variable('dt',iosumdta,0,0.0)
@@ -857,7 +914,7 @@ subroutine force(icall,npart,xyzh,vxyzu,fxyzu,divcurlv,divcurlB,Bevol,dBevol,&
  endif
 
  if (do_radiation) then
-    dtrad = reduceall_mpi('min',dtrad)
+    dtrad = dtred(9)
     if (dtrad < dtcourant) then
        call summary_variable('dt',iosumdtr,0,0.0)
        if (iverbose >= 1 .and. id==master) &
@@ -898,7 +955,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
  use part,        only:rho,dvdx,aprmassoftype,shortsinktree
  use nicil,       only:nimhd_get_jcbcb,nimhd_get_dBdt
  use eos,         only:ieos,eos_is_non_ideal,use_var_comp,icooling
- use eos_stamatellos, only:gradP_cool,getopac_opdep
+ use eos_stamatellos, only:getopac_opdep
 #ifdef GRAVITY
  use kernel,      only:kernel_softening
  use ptmass,      only:use_regnbody
@@ -926,7 +983,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
  use io,          only:fatal
  integer,         intent(in)    :: i
  logical,         intent(in)    :: iamgasi,iamdusti
- real,            intent(in)    :: xpartveci(:)
+ real,            intent(inout) :: xpartveci(:)
  real(kind=8),    intent(in)    :: hi1,hi21,hi41,gradhi,gradsofti
  real,            intent(in)    :: hi,beta
  real,            intent(in)    :: pmassi
@@ -1021,7 +1078,7 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
  real    :: du_losi,du_losj,lorentzj,projbigvi,projbigvj
  real    :: bigvj(1:3),velj(3),metricj(0:3,0:3,2),dvlos,u0max
  real    :: radPj,fgravxi,fgravyi,fgravzi
- real    :: gradpx,gradpy,gradpz,gradP_cooli=0d0,gradP_coolj=0d0
+ real    :: gradP_cooli,gradP_coolj
 
  ! unpack
  xi            = xpartveci(ixi)
@@ -1187,10 +1244,6 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
  fgravyi = 0.
  fgravzi = 0.
  if (icooling == 9) then
-    gradP_cool(i) = 0.
-    gradpx = 0.
-    gradpy = 0.
-    gradpz = 0.
     gradP_cooli=0.
     gradP_coolj=0.
  endif
@@ -1269,31 +1322,28 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
           qi   = 0.
        endif
 
-       ! neighbour mass, density and gradh products from cache (or tables if uncached)
+       ! neighbour mass from the cache (or tables if uncached); its density and gradh
+       ! products are read here, only for actual neighbours
        if (ifilledcellcache .and. n <= maxcellcache) then
-          pmassj       = xyzcache(im,n)
-          rhoj         = xyzcache(irho,n)
-          zetaomegaj   = xyzcache(izetaomega,n)
-#ifdef GRAVITY
-          softomegaj   = xyzcache(isoftomega,n)
-#endif
+          pmassj = xyzcache(im,n)
        elseif (iamsinkj) then
-          pmassj       = xyzmh_ptmass(4,j-maxpsph)
-          rhoj         = 0.
-          zetaomegaj   = 0.
+          pmassj = xyzmh_ptmass(4,j-maxpsph)
+       elseif (use_apr) then
+          pmassj = aprmassoftype(iamtypej,apr_level(j))
+       else
+          pmassj = massoftype(iamtypej)
+       endif
+       if (iamsinkj) then
+          rhoj       = 0.
+          zetaomegaj = 0.
 #ifdef GRAVITY
-          softomegaj   = 0.
+          softomegaj = 0.
 #endif
        else
-          if (use_apr) then
-             pmassj = aprmassoftype(iamtypej,apr_level(j))
-          else
-             pmassj = massoftype(iamtypej)
-          endif
-          rhoj         = rho(j)
-          zetaomegaj   = real(gradh(igradzeta,j))*real(gradh(igradomega,j))
+          rhoj       = rho(j)
+          zetaomegaj = real(gradh(igradzeta,j))*real(gradh(igradomega,j))
 #ifdef GRAVITY
-          softomegaj   = real(gradh(igradsoft,j))*real(gradh(igradomega,j))
+          softomegaj = real(gradh(igradsoft,j))*real(gradh(igradomega,j))
 #endif
        endif
 
@@ -1723,9 +1773,9 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
           fsum(ipot) = fsum(ipot) + pmassj*phii ! no need to symmetrise (see PM07)
 
           if (icooling == 9) then
-             gradpx = gradpx + runix*(gradP_cooli + gradP_coolj)
-             gradpy = gradpy + runiy*(gradP_cooli + gradP_coolj)
-             gradpz = gradpz + runiz*(gradP_cooli + gradP_coolj)
+             fsum(igradpxi) = fsum(igradpxi) + runix*(gradP_cooli + gradP_coolj)
+             fsum(igradpyi) = fsum(igradpyi) + runiy*(gradP_cooli + gradP_coolj)
+             fsum(igradpzi) = fsum(igradpzi) + runiz*(gradP_cooli + gradP_coolj)
           endif
 
           !--calculate divv for use in du, h prediction, av switch etc.
@@ -2062,7 +2112,8 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
 
  enddo loop_over_neighbours2
 
- if (icooling == 9) gradP_cool(i) = sqrt(gradpx*gradpx + gradpy*gradpy + gradpz*gradpz)
+ ! the timestep minimum over neighbours so far, carried to the next block of neighbours
+ if (ind_timesteps) xpartveci(idti) = dti
 
 end subroutine compute_forces
 
@@ -2462,11 +2513,6 @@ subroutine start_cell(cell,iphase,xyzh,vxyzu,gradh,divcurlv,divcurlB,dvdx,Bevol,
           if (use_dustfrac) then
              cell%xpartvec(itstop:itstopend,cell%npcell) = tstopi
           endif
-          if (use_dust .and. ind_timesteps) then
-             dti = get_dt(dt,ibin_old(i))
-             cell%xpartvec(idti,cell%npcell) = dti
-          endif
-
           if (do_radiation) then
              radRi = get_rad_R(rhoi,rad(iradxi,i),radprop(ifluxx:ifluxz,i),radprop(ikappa,i))
              cell%xpartvec(iradxii,cell%npcell)         = rad(iradxi,i)
@@ -2480,6 +2526,11 @@ subroutine start_cell(cell,iphase,xyzh,vxyzu,gradh,divcurlv,divcurlB,dvdx,Bevol,
              cell%xpartvec(iradrbigi,cell%npcell)       = radRi
           endif
 
+       endif
+       ! timestep for implicit drag, on both gas and dust particles
+       if (use_dust .and. ind_timesteps) then
+          dti = get_dt(dt,ibin_old(i))
+          cell%xpartvec(idti,cell%npcell) = dti
        endif
        if (mhd_nonideal) then
           cell%xpartvec(ietaohmi,cell%npcell)        = eta_nimhd(iohm,i)
@@ -2529,6 +2580,7 @@ subroutine compute_cell(cell,listneigh,nneigh,Bevol,xyzh,vxyzu,fxyzu, &
  use io,              only:error,id,master
  use dim,             only:maxvxyzu,use_apr,use_sinktree
  use options,         only:implicit_radiation
+ use neighkdtree,     only:nneighblock
  use part,            only:get_partinfo,iamgas,mhd,igas,isink,maxphase,massoftype,aprmassoftype
  use viscosity,       only:irealvisc,bulkvisc
  use eos,             only:iresistive_heating
@@ -2578,80 +2630,107 @@ subroutine compute_cell(cell,listneigh,nneigh,Bevol,xyzh,vxyzu,fxyzu, &
  logical                         :: useresistiveheat
  logical                         :: ignoreself
 
- integer                         :: i,ip
+ integer                         :: i,ip,n1,n2
+ real                            :: fsum(maxfsum),vsigmax,tsmin,fonrmaxi
+ integer(kind=1)                 :: ibinneigh
 
  realviscosity    = (irealvisc > 0)
  useresistiveheat = (iresistive_heating > 0)
 
- over_parts: do ip = 1,cell%npcell
+ over_blocks: do n1 = 1,max(nneigh,1),nneighblock
+    n2 = min(n1+nneighblock-1,nneigh)
+    over_parts: do ip = 1,cell%npcell
 
-    if (maxphase==maxp) then
-       call get_partinfo(cell%iphase(ip),iactivei,iamgasi,iamdusti,iamtypei)
-       if (iamtypei == isink) then
-          iamsinki = .true.
+       if (maxphase==maxp) then
+          call get_partinfo(cell%iphase(ip),iactivei,iamgasi,iamdusti,iamtypei)
+          if (iamtypei == isink) then
+             iamsinki = .true.
+          else
+             iamsinki = .false.
+          endif
        else
+          iactivei = .true.
+          iamtypei = igas
+          iamdusti = .false.
+          iamgasi  = .true.
           iamsinki = .false.
        endif
-    else
-       iactivei = .true.
-       iamtypei = igas
-       iamdusti = .false.
-       iamgasi  = .true.
-       iamsinki = .false.
-    endif
 
-    if (.not.iactivei .and. .not. (do_radiation .and. implicit_radiation)) then ! handles case where first particle in cell is inactive
-       cycle over_parts     ! also boundary particles are inactive
-    endif
-
-    if (use_apr) then
-       pmassi = aprmassoftype(iamtypei,cell%apr(ip))
-    elseif (iamtypei == isink .and. use_sinktree) then
-       pmassi = cell%xpartvec(imsinki,ip)
-    else
-       pmassi = massoftype(iamtypei)
-    endif
-
-    hi    = cell%xpartvec(ihi,ip)
-    hi1   = 1./hi
-
-    if (iamsinki) then
-       if (hi == 0.) hi1 = 0
-       gradhi = 0.
-       gradsofti = 0.
-       i = cell%arr_index(ip)
-    else
-       i = inodeparts(cell%arr_index(ip))
-       if (cell%xpartvec(igradhi1,ip) > 0.) then
-          gradhi = cell%xpartvec(igradhi1,ip)
-       else
-          call error('force','stored gradh is zero, resetting to 1')
-          gradhi = 1.
+       if (.not.iactivei .and. .not. (do_radiation .and. implicit_radiation)) then ! handles case where first particle in cell is inactive
+          cycle over_parts     ! also boundary particles are inactive
        endif
-#ifdef GRAVITY
-       gradsofti = cell%xpartvec(igradhi2,ip)
-#endif
-    endif
 
-    hi21  = hi1*hi1
-    hi31  = hi1*hi21
-    hi41  = hi21*hi21
-    !
-    !--loop over current particle's neighbours (includes self)
-    !
-    ignoreself = (cell%owner == id)
-    call compute_forces(i,iamgasi,iamdusti,cell%xpartvec(:,ip),hi,hi1,hi21,hi41,gradhi,gradsofti, &
+       if (use_apr) then
+          pmassi = aprmassoftype(iamtypei,cell%apr(ip))
+       elseif (iamtypei == isink .and. use_sinktree) then
+          pmassi = cell%xpartvec(imsinki,ip)
+       else
+          pmassi = massoftype(iamtypei)
+       endif
+
+       hi    = cell%xpartvec(ihi,ip)
+       hi1   = 1./hi
+
+       if (iamsinki) then
+          if (hi == 0.) hi1 = 0
+          gradhi = 0.
+          gradsofti = 0.
+       endif
+       !--sink indices are the same on every task (used to flag sink pairs in shortsinktree);
+       !  gas indices are only known on the owner (used to exclude self)
+       if (iamsinki) then
+          i = cell%arr_index(ip)
+       elseif (cell%owner /= id) then
+          i = 0
+       else
+          i = inodeparts(cell%arr_index(ip))
+       endif
+       if (.not.iamsinki) then
+          if (cell%xpartvec(igradhi1,ip) > 0.) then
+             gradhi = cell%xpartvec(igradhi1,ip)
+          else
+             call error('force','stored gradh is zero, resetting to 1')
+             gradhi = 1.
+          endif
+#ifdef GRAVITY
+          gradsofti = cell%xpartvec(igradhi2,ip)
+#endif
+       endif
+
+       hi21  = hi1*hi1
+       hi31  = hi1*hi21
+       hi41  = hi21*hi21
+       !
+       !--loop over current particle's neighbours (includes self)
+       !
+       ignoreself = (cell%owner == id)
+       call compute_forces(i,iamgasi,iamdusti,cell%xpartvec(:,ip),hi,hi1,hi21,hi41,gradhi,gradsofti, &
                          beta, &
-                         pmassi,listneigh,nneigh,xyzcache,cell%fsums(:,ip),cell%vsigmax(ip), &
-                         .true.,realviscosity,useresistiveheat, &
+                         pmassi,listneigh(n1:n2),n2-n1+1,xyzcache,fsum,vsigmax, &
+                         (n1==1),realviscosity,useresistiveheat, &
                          xyzh,vxyzu,Bevol,cell%iphase(ip),iphase,massoftype, &
                          divcurlB,eta_nimhd,eos_vars, &
                          dustfrac,dustprop,fxyz_drag,gradh,divcurlv,alphaind, &
                          alphau,alphaB,bulkvisc,stressmax, &
-                         cell%ndrag,cell%nstokes,cell%nsuper,cell%tsmin(ip),ibinnow_m1,ibin_wake,cell%ibinneigh(ip), &
+                         cell%ndrag,cell%nstokes,cell%nsuper,tsmin,ibinnow_m1,ibin_wake,ibinneigh, &
                          ignoreself,rad,radprop,dens,metrics,apr_level,dt)
+       if (n1 == 1) then
+          cell%fsums(:,ip)   = fsum
+          cell%vsigmax(ip)   = vsigmax
+          cell%tsmin(ip)     = tsmin
+          cell%ibinneigh(ip) = ibinneigh
+       else
+          ! sums add over blocks, but the largest sink force is a maximum
+          fonrmaxi           = max(cell%fsums(ifonrmaxi,ip),fsum(ifonrmaxi))
+          cell%fsums(:,ip)   = cell%fsums(:,ip) + fsum
+          cell%fsums(ifonrmaxi,ip) = fonrmaxi
+          cell%vsigmax(ip)   = max(cell%vsigmax(ip),vsigmax)
+          cell%tsmin(ip)     = min(cell%tsmin(ip),tsmin)
+          cell%ibinneigh(ip) = max(cell%ibinneigh(ip),ibinneigh)
+       endif
 
- enddo over_parts
+    enddo over_parts
+ enddo over_blocks
 
 end subroutine compute_cell
 
@@ -2708,7 +2787,7 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
  use part,           only:Omega_k
  use io,             only:warning
  use physcon,        only:c,kboltz
- use eos_stamatellos,only:duSPH
+ use eos_stamatellos,only:duSPH,gradP_cool
  integer,         intent(in)    :: icall
  type(cellforce), intent(inout) :: cell
  real,            intent(inout) :: fxyzu(:,:)
@@ -2813,6 +2892,7 @@ subroutine finish_cell_and_store_results(icall,cell,fxyzu,xyzh,vxyzu,poten,dt,dv
 
     fsum(:)       = cell%fsums(:,ip)
     xpartveci(:)  = cell%xpartvec(:,ip)
+    if (icooling == 9 .and. .not.iamsinki) gradP_cool(i) = sqrt(fsum(igradpxi)**2 + fsum(igradpyi)**2 + fsum(igradpzi)**2)
     if (ind_timesteps) ibin_neighi   = cell%ibinneigh(ip)
 
     dtc     = dtmax
@@ -3529,5 +3609,70 @@ subroutine get_drag_terms(tsijtmp,dt,sdrag1,sdrag2,fxi_drag,fyi_drag,fzi_drag,&
     sdrag2 = 0.
  endif
 end subroutine get_drag_terms
+
+!-----------------------------------------------------------------------
+!+
+!  the tasks each particle of an exported cell must be sent to: those with
+!  particles within the kernel radius of either (force uses h_i and h_j),
+!  a subset of the tasks found for the whole cell. Tasks that no particle
+!  reaches are removed from remote_export
+!+
+!-----------------------------------------------------------------------
+subroutine particle_targets(cell,remote_export,ptargets)
+ use neighkdtree, only:get_particle_targets
+ use kernel,      only:radkern
+ type(cellforce), intent(in)    :: cell
+ logical,         intent(inout) :: remote_export(:)
+ logical,         intent(out)   :: ptargets(:,:)
+ integer :: np
+
+ np = cell%npcell
+
+ ! a fraction more than the kernel radius, so that rounding can never drop a neighbour
+ call get_particle_targets(np,cell%xpartvec(ixi:izi,1:np),radkern*cell%xpartvec(ihi,1:np)*(1. + 1.e-6),&
+                           .true.,remote_export,ptargets)
+
+end subroutine particle_targets
+
+!-----------------------------------------------------------------------
+!+
+!  send a cell to each task with leaves that the dual tree walk paired
+!  with it (listed in remote_leaves), with the owner's local index of
+!  each leaf, in messages of at most maxcellleaves leaves
+!+
+!-----------------------------------------------------------------------
+subroutine send_cell_with_leaves(cell,stack,counters)
+ use io,          only:nprocs
+ use neighkdtree, only:remote_leaves,nremote_leaves
+ use mpikdtree,   only:remote_leaf_owner,remote_local_index
+ use mpiderivs,   only:send_cell
+ type(cellforce),  intent(in)    :: cell
+ type(stackforce), intent(inout) :: stack
+ integer,          intent(inout) :: counters(:,:)
+ logical :: target(nprocs)
+ integer :: iproc,k,n,nleaves,leaves(maxcellleaves)
+
+ ! for each task, its leaves met by the walk, sent with the cell in messages of at most
+ ! maxcellleaves leaves
+ do iproc = 0,nprocs-1
+    target = .false.
+    target(iproc+1) = .true.
+
+    ! its leaves met by the walk
+    nleaves = 0
+    do k = 1,nremote_leaves
+       n = remote_leaves(k)
+       if (remote_leaf_owner(n) /= iproc + 1) cycle
+       nleaves = nleaves + 1
+       leaves(nleaves) = abs(remote_local_index(n))
+       if (nleaves == maxcellleaves) then
+          call send_cell(cell,target,stack,counters,leaves=leaves(1:nleaves))
+          nleaves = 0
+       endif
+    enddo
+    if (nleaves > 0) call send_cell(cell,target,stack,counters,leaves=leaves(1:nleaves))
+ enddo
+
+end subroutine send_cell_with_leaves
 
 end module forces

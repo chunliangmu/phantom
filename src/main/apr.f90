@@ -14,7 +14,7 @@ module apr
 !
 ! :Runtime parameters: None
 !
-! :Dependencies: apr_region, dim, get_apr_level, io, io_summary, kdtree,
+! :Dependencies: apr_region, boundary, dim, get_apr_level, io, io_summary, kdtree,
 !   kernel, mpiforce, neighkdtree, part, physcon, quitdump, relaxem, sortutils,
 !   utils_apr, vectorutils
 !
@@ -510,7 +510,7 @@ subroutine get_nearest_neighbour_distance(nlist,list,npart,xyzh,vxyzu,rneigh)
           dx = xi - xyzcache(1:3,n)
        else
           dx = xi - xyzh(1:3,j)
-          if (periodic) call mod_boundary(dx(1),dx(2),dx(3))
+          if (periodic) call mod_boundary(dx)
        endif
        r2min = min(r2min,dot_product(dx,dx))
     enddo
